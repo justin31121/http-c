@@ -58,7 +58,7 @@ int main() {
   Region_Ptr base = region_current(region);
   Http_Parser parser = http_parser((Http_Parser_Write_Callback) region_callback, NULL, &region);
 
-  const char *body = "grant_type=client_credentials";  
+  const char *body = "grant_type=client_credentials";
   if(http_request(&http, "/api/token", "POST",
 		  (const unsigned char *) body, (int) strlen(body),
 		  (Http_Write_Callback) http_parser_consume, &parser,

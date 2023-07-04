@@ -106,9 +106,9 @@ HTTP_DEF Http_Ret http_request(Http *http, const char *route, const char *method
 			       const unsigned char *body, int body_len,
 			       Http_Write_Callback write_callback, void *userdata,
 			       const char *headers_extra);
+HTTP_DEF void http_free(Http *http);
 
 HTTP_DEF Http_Ret http_fwrite(void *f, const char *buffer, size_t buffer_size);
-HTTP_DEF void http_free(Http *http);
 
 // Protected
 HTTP_DEF bool http_maybe_init_external_libs();

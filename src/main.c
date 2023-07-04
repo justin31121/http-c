@@ -82,7 +82,7 @@ bool on_array_elem(void *_array, void *_elem, void *arg) {
 
     elem->name = name;
     
-    printf("ARR: Appending "json_fmt" to "json_fmt"\n", json_arg(*elem), json_arg(*array)); fflush(stdout);
+    printf("ARR: Appending "json_fmt" to "json_fmt"\n", json_arg(*elem), json_arg(*array));
 
     return true;
 }
