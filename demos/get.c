@@ -4,7 +4,7 @@
 #include "region.h"
 
 #define HTTP_IMPLEMENTATION
-#define HTTP_OPEN_SSL
+#define HTTP_WIN32_SSL
 #include "http.h"
 
 #include "common.h"

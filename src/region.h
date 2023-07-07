@@ -62,15 +62,17 @@ typedef struct{
 }string;
 
 #define str_fmt "%.*s"
-#define str_arg(s) (int) (s).len, region_deref((s).data)
+#define str_arg(s) (int) (s).len, (char *) region_deref((s).data)
 
 typedef bool (*string_map_func)(const char *input, size_t input_size, char *buffer, size_t buffer_size, size_t *output_size);
 
 // Public
 REGION_DEF bool string_alloc(string *s, Region *region, const char *cstr);
 REGION_DEF bool string_alloc2(string *s, Region *region, const char *cstr, size_t cstr_len);
+REGION_DEF bool string_copy(string *s, Region *region, string t);
 REGION_DEF bool string_snprintf(string *s, Region *region, const char *fmt, ...);
 REGION_DEF bool string_map(string *s, Region *region, string input, string_map_func map_func);
+REGION_DEF bool string_eq(string s, const char* cstr);
 
 REGION_DEF bool str_empty(string s);
 
@@ -83,7 +85,7 @@ REGION_DEF bool str_empty(string s);
 #define region_deref(ptr) ( ((ptr).region)->data + (ptr).offset )
 #define region_rewind(region, ptr) (region)->length = (ptr).offset
 #define region_flush(region) (region)->length = 0
-#define region_current(region) (Region_Ptr) { .region = (Region *) &(region), .offset = (region).length }
+#define region_current(r) (Region_Ptr) { .region = &(r), .offset = (r).length }
 
 REGION_DEF bool region_init(Region *region, uint64_t capacity_bytes) {
 #if   defined(REGION_PADDED)
@@ -240,6 +242,19 @@ REGION_DEF bool string_alloc2(string *s, Region *region, const char *cstr, size_
     return true;
 }
 
+REGION_DEF bool string_copy(string *s, Region *region, string t) {
+    s->len = t.len;
+    if(!region_alloc(&s->data, region, s->len)) return false;
+    memcpy( region_deref(s->data), region_deref(t.data), s->len);
+    return true;  
+}
+
+REGION_DEF bool string_eq(string s, const char* cstr) {
+  size_t cstr_len = strlen(cstr);
+  if(s.len != cstr_len) return false;
+  return memcmp( region_deref(s.data), cstr, cstr_len) == 0;
+  
+}
 
 #endif //REGION_NO_STRING
 
