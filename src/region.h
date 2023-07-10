@@ -72,6 +72,9 @@ REGION_DEF bool string_alloc2(string *s, Region *region, const char *cstr, size_
 REGION_DEF bool string_copy(string *s, Region *region, string t);
 REGION_DEF bool string_snprintf(string *s, Region *region, const char *fmt, ...);
 REGION_DEF bool string_map(string *s, Region *region, string input, string_map_func map_func);
+REGION_DEF bool string_map_cstr(string *s, Region *region, const char *cstr, string_map_func map_func);
+REGION_DEF bool string_map_impl(string *s, Region *regon, const char *cstr, size_t cstr_len, string_map_func map_fun);
+
 REGION_DEF bool string_eq(string s, const char* cstr);
 
 REGION_DEF bool str_empty(string s);
@@ -218,21 +221,31 @@ REGION_DEF bool string_snprintf(string *s, Region *region, const char *fmt, ...)
   return true;
 }
 
-REGION_DEF bool string_map(string *s, Region *region, string input, string_map_func map_func) {
-  s->len = input.len;
+REGION_DEF bool string_map_impl(string *s, Region *region,
+			       const char *cstr, size_t cstr_len,
+			       string_map_func map_func) {
+  s->len = cstr_len;
   if(!region_alloc(&s->data, region, s->len)) return false;
   size_t output_size;
-  bool map_success = map_func( (const char *) region_deref(input.data), input.len, (char *) region_deref(s->data), s->len, &output_size);
+  bool map_success = map_func( cstr, cstr_len, (char *) region_deref(s->data), s->len, &output_size);
   while(!map_success) {
     s->len *= 2;
     region_rewind(region, s->data);
     if(!region_alloc(&s->data, region, s->len)) return false;
-    map_success = map_func( (const char *) region_deref(input.data), input.len, (char *) region_deref(s->data), s->len, &output_size);
+    map_success = map_func( cstr, cstr_len, (char *) region_deref(s->data), s->len, &output_size);
   }  
   s->len = output_size;
   region_rewind(region, s->data);
   if(!region_alloc(&s->data, region, s->len)) return false;
-  return true;
+  return true;  
+}
+
+REGION_DEF bool string_map(string *s, Region *region, string input, string_map_func map_func) {
+  return string_map_impl(s, region, (const char *) region_deref(input.data), input.len, map_func);
+}
+
+REGION_DEF bool string_map_cstr(string *s, Region *region, const char *cstr, string_map_func map_func) {
+  return string_map_impl(s, region, cstr, strlen(cstr), map_func); 
 }
 
 REGION_DEF bool string_alloc2(string *s, Region *region, const char *cstr, size_t cstr_len) {

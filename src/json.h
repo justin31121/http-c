@@ -464,7 +464,7 @@ JSON_DEF void json_array_free(Json_Array *array) {
 JSON_DEF bool json_object_fprint(char *key, size_t key_len, Json *json, size_t index, void *_userdata) {
   Json_Object_Data *data = (Json_Object_Data *) _userdata;
 
-  fprintf(data->f, "'%.*s': ", (int) key_len, key);
+  fprintf(data->f, "\"%.*s\": ", (int) key_len, key);
   json_fprint(data->f, *json);
   if(index != data->count - 1) fprintf(data->f, ", ");
   
@@ -486,7 +486,7 @@ JSON_DEF void json_fprint(FILE *f, Json json) {
     fprintf(f,"%2f", json.as.doubleval);
   } break;
   case JSON_KIND_STRING: {
-    fprintf(f,"%s", json.as.stringval);
+    fprintf(f,"\"%s\"", json.as.stringval);
   } break;
   case JSON_KIND_ARRAY: {
     fprintf(f,"[");

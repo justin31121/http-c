@@ -23,6 +23,9 @@
 #define BASE64_IMPLEMENTATION
 #include "../src/base64.h"
 
+#define URL_IMPLEMENTATION
+#include "../src/url.h"
+
 #include "../src/common.h"
 
 Http_Parser_Ret region_callback(Region *region, const char *data, size_t size) {
@@ -57,6 +60,19 @@ bool on_elem_json(Json_Parser_Type type, const char *content, size_t content_siz
     double num = strtod(content, NULL);
     *json = json_number(num);
   } break;
+  case JSON_PARSER_TYPE_ARRAY: {
+    json->kind = JSON_KIND_ARRAY;
+    if(!json_array_init(&json->as.arrayval)) return false;        
+  } break;
+  case JSON_PARSER_TYPE_FALSE: {
+    *json = json_false();
+  } break;
+  case JSON_PARSER_TYPE_TRUE: {
+    *json = json_true();
+  } break;
+  case JSON_PARSER_TYPE_NULL: {
+    *json = json_null();
+  } break;
   default: {
     printf("INFO: unexpected type: %s\n", json_parser_type_name(type) );
     return false;
@@ -80,6 +96,19 @@ bool on_object_elem_json(void *object, const char *key_data, size_t key_size, vo
   Json *smol = (Json *) elem;
   
   if(!json_object_append2(json->as.objectval, key_data, key_size, smol)) {
+    return false;
+  }
+
+  return true;
+}
+
+bool on_array_elem_json(void *array, void *elem, void *arg) {
+  (void) arg;
+
+  Json *json = (Json *) array;
+  Json *smol = (Json *) elem;
+  
+  if(!json_array_append(json->as.arrayval, smol)) {
     return false;
   }
 
@@ -169,7 +198,14 @@ bool get_access_token(const char *spotify_creds, Region *region, string *access_
   return true;
 }
 
-int main() {
+int main(int argc, char **argv) {
+
+  const char *program = argv[0];
+  if(argc < 2) {
+    fprintf(stderr, "ERROR: Please provide an argument\n");
+    fprintf(stderr, "USAGE: %s <search-term>\n", program);
+  }
+  const char *input = argv[1];
 
   Region region;
   if(!region_init(&region, 1))
@@ -183,12 +219,55 @@ int main() {
   if(!get_access_token(spotify_creds, &region, &access_token))
     panic("get_access_token");
   
-  printf( str_fmt, str_arg(access_token) );
+  //printf( str_fmt, str_arg(access_token) );
 
   //////////////////////////////////////////////////////
 
+  string input_encoded;
+  if(!string_map_cstr(&keyword_base64, &region, input, url_encode))
+    panic("string_map_cstr");
+
+  string url;
+  if(!string_snprintf(&url, &region,
+		      "/v1/search?q="str_fmt
+		      "&type=track,playlist,album"
+		      "\0", str_arg(input_encoded) ))
+    panic("string_snprintf");
+
+  string auth;
+  if(!string_snprintf(&auth, &region,
+		      "Authorization: Bearer "str_fmt"\r\n"
+		      "\0", str_arg(access_token) ))
+    panic("string_snprintf");
+
+
+  Http http;
+  if(!http_init(&http, "api.spotify.com", HTTPS_PORT, true))
+    panic("http_init");
+
+  Json_Ctx ctx = { (Json) {0}, false };
+
+  Json_Parser jparser = json_parser();
+  jparser.on_elem = on_elem_json;
+  jparser.on_object_elem = on_object_elem_json;
+  jparser.on_array_elem = on_array_elem_json;
+  jparser.arg = &ctx;
   
+  Http_Parser parser =
+    http_parser(
+		(Http_Parser_Write_Callback) json_parser_consume, NULL, &jparser
+		//(Http_Parser_Write_Callback) http_fwrite, NULL, stdout
+		);
   
+  if(http_request(&http, (const char *) region_deref(url.data), "GET",
+		  NULL, 0,
+		  (Http_Write_Callback) http_parser_consume, &parser,
+		  (const char *) region_deref(auth.data) ) != HTTP_RET_SUCCESS )
+    panic("http_request");
+
+  http_free(&http);
+  
+  if(ctx.got_root) json_fprint(stdout, ctx.json);
   
   return 0;
 }
