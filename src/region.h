@@ -37,16 +37,16 @@ typedef struct{
 // Public
 REGION_DEF bool region_init(Region *region, uint64_t capacity_bytes);
 REGION_DEF bool region_alloc(Region_Ptr *ptr, Region *region, uint64_t size_bytes);
-REGION_DEF bool region_free(Region *region);
+REGION_DEF void region_free(Region *region);
 
 // 'Constant' Ptrs
-REGION_DEF void *region_base(Region region);
-REGION_DEF Region_Ptr region_current(Region region);
+void *region_base(Region region);
+Region_Ptr region_current(Region region);
 
-REGION_DEF void region_flush(Region *region);
-REGION_DEF void region_rewind(Region *region, Region_Ptr ptr);
+void region_flush(Region *region);
+void region_rewind(Region *region, Region_Ptr ptr);
 
-REGION_DEF void *region_deref(Region_Ptr ptr);
+void *region_deref(Region_Ptr ptr);
 
 ////////////////////////////////////////////////////////////////
 
@@ -77,7 +77,7 @@ REGION_DEF bool string_map_impl(string *s, Region *regon, const char *cstr, size
 
 REGION_DEF bool string_eq(string s, const char* cstr);
 
-REGION_DEF bool str_empty(string s);
+bool str_empty(string s);
 
 #endif //REGION_NO_STRING
 
@@ -193,7 +193,7 @@ REGION_DEF bool region_alloc(Region_Ptr *ptr, Region *region, uint64_t size_byte
 #endif
 }
 
-REGION_DEF bool region_free(Region *region) {
+REGION_DEF void region_free(Region *region) {
     free(region->data);
 }
 

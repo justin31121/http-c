@@ -706,7 +706,7 @@ HTTP_DEF bool http_socket_read(char *buffer, size_t buffer_size, void *_http, si
 	    buffer_size -= use;
 	    result += (int) use;
 
-	    if (use == http->win32_socket.available) {
+	    if ((int) use == http->win32_socket.available) {
 		// all decrypted data is used, remove ciphertext from incoming buffer so next time it starts from beginning
 		MoveMemory(http->win32_socket.incoming, http->win32_socket.incoming + http->win32_socket.used, http->win32_socket.received - http->win32_socket.used);
 		http->win32_socket.received -= http->win32_socket.used;

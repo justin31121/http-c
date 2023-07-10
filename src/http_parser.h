@@ -64,7 +64,7 @@ HTTP_PARSER_DEF Http_Parser_Ret http_parser_consume(Http_Parser *parser, const c
 HTTP_PARSER_DEF Http_Parser_Ret http_parser_consume_headers(Http_Parser *parser, Http_Parser_String s);
 HTTP_PARSER_DEF Http_Parser_String http_parser_string_chop_by_delim(Http_Parser_String *s, char delim);
 HTTP_PARSER_DEF Http_Parser_String http_parser_string_trim(Http_Parser_String s);
-HTTP_PARSER_DEF bool http_parser_string_eq(Http_Parser_String s, const char *cstr);
+bool http_parser_string_eq(Http_Parser_String s, const char *cstr);
 HTTP_PARSER_DEF bool http_parser_string_chop_int64_t(Http_Parser_String *s, int64_t *n);
 HTTP_PARSER_DEF bool http_parser_string_chop_hex(Http_Parser_String *s, int64_t *n);
 

@@ -316,8 +316,8 @@ JSON_DEF void json_array_free(Json_Array *array);
 JSON_DEF void json_fprint(FILE *f, Json json);
 
 #define json_array_get(array, pos) *(Json *) ((unsigned char *) (array)->data + sizeof(Json) * (pos));
-#define json_array_len(array) (array).as.arrayval->len
-#define json_object_len(object) ((Hashtable *) (object.as.objectval))->count
+#define json_array_len(array) (array)->len
+#define json_object_len(object) ((Hashtable *) (object))->count
 
 #define json_null() (Json) {.kind = JSON_KIND_NULL }
 #define json_false() (Json) {.kind = JSON_KIND_FALSE }
@@ -493,7 +493,7 @@ JSON_DEF void json_fprint(FILE *f, Json json) {
     Json_Array *array = json.as.arrayval;
     for(size_t i=0;i<array->len;i++) {
       Json elem = json_array_get(array, i);
-      json_fprint(stdout, elem);
+      json_fprint(f, elem);
       if(i != array->len - 1) fprintf(f,", ");
     }    
     fprintf(f,"]");
