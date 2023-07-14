@@ -13,9 +13,8 @@
 #include "../src/http_parser.h"
 
 #define HTTP_IMPLEMENTATION
-#define HTTP_WIN32_SSL
+#define HTTP_OPEN_SSL
 #include "../src/http.h"
-
 
 #define IO_IMPLEMENTATION
 #include "../src/io.h"

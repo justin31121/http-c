@@ -213,7 +213,12 @@ REGION_DEF bool string_alloc(string *s, Region *region, const char *cstr) {
 REGION_DEF bool string_snprintf(string *s, Region *region, const char *fmt, ...) {
   va_list args;
   va_start(args, fmt);
-  va_list args_copy = args;  
+#ifdef linux
+  va_list args_copy;
+  va_copy(args_copy, args);
+#else
+  va_list args_copy = args;
+#endif
   s->len = vsnprintf(NULL, 0, fmt, args) + 1;
   va_end(args);
   if(!region_alloc(&s->data, region, s->len)) return false;

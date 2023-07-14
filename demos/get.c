@@ -1,13 +1,13 @@
 #define REGION_IMPLEMENTATION
 #define REGION_LINEAR
 #define REGION_DYNAMIC
-#include "region.h"
+#include "../src/region.h"
 
 #define HTTP_IMPLEMENTATION
-#define HTTP_WIN32_SSL
-#include "http.h"
+#define HTTP_OPEN_SSL
+#include "../src/http.h"
 
-#include "common.h"
+#include "../src/common.h"
 
 static size_t count  = 0;
 
@@ -42,7 +42,7 @@ int main() {
   http_free(&http);
 
   printf("%.*s", (int) count, (char *) region_base(region) );
-  printf("count: %lld\n", count);
+  printf("count: %zu\n", count);
 
   return 0;
 }

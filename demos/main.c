@@ -1,19 +1,19 @@
 #define REGION_IMPLEMENTATION
 #define REGION_LINEAR
 #define REGION_STATIC
-#include "region.h"
+#include "../src/region.h"
 
 #define HTTP_IMPLEMENTATION
-#define HTTP_WIN32_SSL
-#include "http.h"
+#define HTTP_OPEN_SSL
+#include "../src/http.h"
 
 #define JSON_PARSER_IMPLEMENTATION
-#include "json_parser.h"
+#include "../src/json_parser.h"
 
 #define HTTP_PARSER_IMPLEMENTATION
-#include "http_parser.h"
+#include "../src/http_parser.h"
 
-#include "common.h"
+#include "../src/common.h"
 
 static string string_root;
 

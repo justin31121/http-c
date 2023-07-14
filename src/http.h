@@ -28,8 +28,16 @@
 #define HTTP_PORT 80
 #define HTTPS_PORT 443
 
-#include <ws2tcpip.h>
-#include <windows.h>
+#ifdef _WIN32
+#  include <ws2tcpip.h>
+#  include <windows.h>
+#elif linux
+#  include <sys/socket.h>
+#  include <netinet/in.h>
+#  include <netdb.h>
+#  include <arpa/inet.h>
+#  include <unistd.h>
+#endif
 
 #include <stdio.h>
 #include <stdbool.h>
@@ -75,7 +83,12 @@ typedef enum{
 }Http_Ret;
 
 typedef struct{
+
+#ifdef _WIN32
     SOCKET socket;
+#else
+    int _socket;
+#endif    
     const char *hostname;
 #ifdef HTTP_OPEN_SSL
     SSL *conn;  
@@ -135,7 +148,10 @@ HTTP_DEF size_t http_sendf_impl_copy(Http_Sendf_Context *context, size_t buffer_
 
 #ifdef HTTP_IMPLEMENTATION
 
+#ifdef _WIN32
 static bool http_global_wsa_startup = false;
+#endif //_WIN32
+
 #ifdef HTTP_OPEN_SSL
 static SSL_CTX *http_global_ssl_context = NULL;
 #endif //HTTP_OPEN_SSL
@@ -146,10 +162,17 @@ bool http_init(Http *http, const char* hostname, uint16_t port, bool use_ssl) {
 	return false;
     }
 
+#ifdef _WIN32
     http->socket = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, 0);
     if( http->socket == INVALID_SOCKET ) {
 	return false;
     }
+#elif linux
+    http->_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if( http->_socket == -1) {
+      return false;
+    }    
+#endif
 
     if(!http_socket_connect_plain(http, hostname, port)) {
 	return false;
@@ -163,7 +186,7 @@ bool http_init(Http *http, const char* hostname, uint16_t port, bool use_ssl) {
 	if(!http->conn) {
 	    return false;
 	}
-	SSL_set_fd(http->conn, (int) http->socket); // TODO: maybe check this cast
+	SSL_set_fd(http->conn, (int) http->_socket); // TODO: maybe check this cast
 
 	SSL_set_connect_state(http->conn);
 	SSL_set_tlsext_host_name(http->conn, hostname);
@@ -191,7 +214,8 @@ bool http_init(Http *http, const char* hostname, uint16_t port, bool use_ssl) {
 }
 
 HTTP_DEF bool http_socket_connect_plain(Http *http, const char *hostname, uint16_t port) {
-    // BEGIN connect
+
+#ifdef _WIN32
     struct addrinfo hints;
     struct addrinfo* result = NULL;
 
@@ -216,6 +240,33 @@ HTTP_DEF bool http_socket_connect_plain(Http *http, const char *hostname, uint16
     freeaddrinfo(result);
 
     return true;
+#elif linux
+    struct sockaddr_in addr = {0};
+
+    struct hostent *hostent = gethostbyname(hostname);
+    if(!hostent) {
+      return false;
+    }
+
+    in_addr_t in_addr = inet_addr(inet_ntoa(*(struct in_addr*)*(hostent->h_addr_list)));
+    if(in_addr == (in_addr_t) -1) {
+      return false;
+    }
+    addr.sin_addr.s_addr = in_addr;
+
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((u_short) port);
+    if(connect(http->_socket, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
+      return false;
+    }
+
+    return true;
+#else
+    (void) http;
+    (void) hostname;
+    (void) port;
+    return false;
+#endif
 }
 
 //https://gist.github.com/mmozeiko/c0dfcc8fec527a90a02145d2cc0bfb6d
@@ -472,8 +523,12 @@ void http_free(Http *http) {
     }
     
 #endif //HTTP_OPEN_SSL
-  
+
+#ifdef _WIN32
     closesocket(http->socket);
+#elif linux
+    close(http->_socket);
+#endif
 }
 
 HTTP_DEF bool http_maybe_init_external_libs() {
@@ -488,7 +543,8 @@ HTTP_DEF bool http_maybe_init_external_libs() {
 	}    
     }
 #endif //HTTP_OPEN_SSL
-  
+
+#ifdef _WIN32
     if(!http_global_wsa_startup) {
     
 	WSADATA wsaData;
@@ -498,6 +554,7 @@ HTTP_DEF bool http_maybe_init_external_libs() {
     
 	http_global_wsa_startup = true;
     }
+#endif //_WIN32
 
     return true;
 }
@@ -507,18 +564,22 @@ HTTP_DEF void http_free_external_libs() {
 #ifdef HTTP_OPEN_SSL
     SSL_CTX_free(http_global_ssl_context);
 #endif //HTTP_OPEN_SSLs
-    WSACleanup();  
+
+#ifdef _WIN32
+    WSACleanup();
+#endif //_WIN32
 }
 
 HTTP_DEF bool http_socket_write_plain(const char *data, size_t size, void *_http) {
 
     Http *http = (Http *) _http;
-    
+
+#ifdef _WIN32
     int ret = send(http->socket, data, (int) size, 0);
     if(ret == SOCKET_ERROR) {
     
 	// send error
-	return false;    
+	return false;
     } else if(ret == 0) {
     
 	// connection was closed
@@ -527,7 +588,29 @@ HTTP_DEF bool http_socket_write_plain(const char *data, size_t size, void *_http
     
 	// send success
 	return true;
-    }  
+    }
+#elif linux
+
+    int ret = send(http->_socket, data, (int) size, 0);
+    if(ret < 0) {
+      // TODO: check if this is the right error
+      if(errno == ECONNRESET) {
+
+	// connection was closed
+	return false;
+      } else {
+
+	// send error
+	return false;
+      }      
+    } else {
+
+      // send success
+      return true;
+    }
+#else
+    return false;
+#endif 
 }
 
 HTTP_DEF bool http_socket_write(const char *data, size_t size, void *_http) {
@@ -629,7 +712,8 @@ HTTP_DEF bool http_socket_write(const char *data, size_t size, void *_http) {
 HTTP_DEF bool http_socket_read_plain(char *buffer, size_t buffer_size, void *_http, size_t *read) {
 
     Http *http = (Http *) _http;
-    
+
+#ifdef _WIN32
     int ret = recv(http->socket, buffer, (int) buffer_size, 0);
     if(ret == SOCKET_ERROR) {
       
@@ -646,6 +730,26 @@ HTTP_DEF bool http_socket_read_plain(char *buffer, size_t buffer_size, void *_ht
 	*read = (size_t) ret;
 	return true;
     }
+#elif linux
+
+    int ret = recv(http->_socket, buffer, (int) buffer_size, 0);
+    if(ret < 0) {
+
+      // recv error
+      return false;
+    } else if(ret == 0) {
+
+      // connection was closed
+      *read = 0;
+      return true;
+    } else {
+
+      *read = (size_t) ret; 
+      return true;
+    }
+#else
+    return false;
+#endif 
 }
 
 HTTP_DEF bool http_socket_read(char *buffer, size_t buffer_size, void *_http, size_t *read) {
