@@ -87,8 +87,8 @@ typedef struct{
 #ifdef _WIN32
     SOCKET socket;
 #else
-    int _socket;
-#endif    
+    int socket;
+#endif
     const char *hostname;
 #ifdef HTTP_OPEN_SSL
     SSL *conn;  
@@ -168,8 +168,8 @@ bool http_init(Http *http, const char* hostname, uint16_t port, bool use_ssl) {
 	return false;
     }
 #elif linux
-    http->_socket = socket(AF_INET, SOCK_STREAM, 0);
-    if( http->_socket == -1) {
+    http->socket = socket(AF_INET, SOCK_STREAM, 0);
+    if( http->socket == -1) {
       return false;
     }    
 #endif
@@ -186,7 +186,7 @@ bool http_init(Http *http, const char* hostname, uint16_t port, bool use_ssl) {
 	if(!http->conn) {
 	    return false;
 	}
-	SSL_set_fd(http->conn, (int) http->_socket); // TODO: maybe check this cast
+	SSL_set_fd(http->conn, (int) http->socket); // TODO: maybe check this cast
 
 	SSL_set_connect_state(http->conn);
 	SSL_set_tlsext_host_name(http->conn, hostname);
@@ -256,7 +256,7 @@ HTTP_DEF bool http_socket_connect_plain(Http *http, const char *hostname, uint16
 
     addr.sin_family = AF_INET;
     addr.sin_port = htons((u_short) port);
-    if(connect(http->_socket, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
+    if(connect(http->socket, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
       return false;
     }
 
@@ -527,7 +527,7 @@ void http_free(Http *http) {
 #ifdef _WIN32
     closesocket(http->socket);
 #elif linux
-    close(http->_socket);
+    close(http->socket);
 #endif
 }
 
@@ -591,7 +591,7 @@ HTTP_DEF bool http_socket_write_plain(const char *data, size_t size, void *_http
     }
 #elif linux
 
-    int ret = send(http->_socket, data, (int) size, 0);
+    int ret = send(http->socket, data, (int) size, 0);
     if(ret < 0) {
       // TODO: check if this is the right error
       if(errno == ECONNRESET) {
@@ -732,7 +732,7 @@ HTTP_DEF bool http_socket_read_plain(char *buffer, size_t buffer_size, void *_ht
     }
 #elif linux
 
-    int ret = recv(http->_socket, buffer, (int) buffer_size, 0);
+    int ret = recv(http->socket, buffer, (int) buffer_size, 0);
     if(ret < 0) {
 
       // recv error
