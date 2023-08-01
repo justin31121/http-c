@@ -108,8 +108,12 @@ HTTP_PARSER_DEF Http_Parser_Ret http_parser_consume_headers(Http_Parser *parser,
     while(s.len) {
 	line = http_parser_string_chop_by_delim(&s, '\n');
 	if(line.len && line.data[0] == '\r') {
-	    if(parser->state == HTTP_PARSER_STATE_IN_HEADER_CONTENT_LENGTH) {
-		parser->state = HTTP_PARSER_STATE_CONTENT_LENGTH;
+
+	    if(!parser->callback) {
+		return HTTP_PARSER_RET_SUCCESS;
+	    }
+	    
+	    if(parser->state == HTTP_PARSER_STATE_IN_HEADER_CONTENT_LENGTH) {		       	parser->state = HTTP_PARSER_STATE_CONTENT_LENGTH;
 	    } else {
 		parser->state = HTTP_PARSER_STATE_CHUNKED;
 	    }
@@ -244,14 +248,14 @@ consume:
 	Http_Parser_String s = { .data = data, .len = size};
 	return http_parser_consume_headers(parser, s);
     } break;
-    case HTTP_PARSER_STATE_CONTENT_LENGTH: {
+    case HTTP_PARSER_STATE_CONTENT_LENGTH: {	
 	int64_t _size = (int64_t) size;
     
 	if(_size > parser->bytes_to_read) {
 	    // if more is provided then needed
 	    return HTTP_PARSER_RET_ABORT;
-	}
-
+	}	
+	
 	Http_Parser_Ret ret = parser->callback(parser->userdata, data, size);
 	if(ret == HTTP_PARSER_RET_ABORT) {
 	    return HTTP_PARSER_RET_ABORT;
@@ -326,6 +330,10 @@ consume:
 	if(len > parser->bytes_to_read) {
 	    // too many bytes supplied
 	    return HTTP_PARSER_RET_ABORT;
+	}
+
+	if(!parser->callback) {
+	    return HTTP_PARSER_RET_SUCCESS;
 	}
 
 	Http_Parser_Ret ret = parser->callback(parser->userdata, data, size);
