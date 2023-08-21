@@ -13,6 +13,14 @@
 #define JSON_PARSER_DEF static inline
 #endif //JSON_PARSER_DEF
 
+#ifdef JSON_PARSER_VERBOSE
+#  include <stdio.h>
+#  define JSON_PARSER_LOG(...) do{ fflush(stdout); fprintf(stderr, "JSON_PARSER: " __VA_ARGS__); fprintf(stderr, "\n"); fflush(stderr); } while(0)
+#else
+#  define JSON_PARSER_LOG(...)
+#endif //JSON_PARSER_VERBOSE
+
+
 typedef enum{
   JSON_PARSER_CONST_TRUE = 0,
   JSON_PARSER_CONST_FALSE,
@@ -93,10 +101,14 @@ JSON_PARSER_DEF const char *json_parser_type_name(Json_Parser_Type type) {
 #define JSON_PARSER_BUFFER 0
 #define JSON_PARSER_KEY_BUFFER 1
 
+typedef bool (*Json_Parser_On_Elem)(Json_Parser_Type type, const char *content, size_t content_size, void *arg, void **elem);
+typedef bool (*Json_Parser_On_Object_Elem)(void *object, const char *key_data, size_t key_size, void *elem, void *arg);
+typedef bool (*Json_Parser_On_Array_Elem)(void *array, void *elem, void *arg);
+
 typedef struct{
-  bool (*on_elem)(Json_Parser_Type type, const char *content, size_t content_size, void *arg, void **elem);
-  bool (*on_object_elem)(void *object, const char *key_data, size_t key_size, void *elem, void *arg);
-  bool (*on_array_elem)(void *array, void *elem, void *arg);
+  Json_Parser_On_Elem on_elem;
+  Json_Parser_On_Object_Elem on_object_elem;
+  Json_Parser_On_Array_Elem on_array_elem;
   void *arg;
 
   Json_Parser_State state;
@@ -115,7 +127,7 @@ typedef struct{
 }Json_Parser;
 
 // Public
-JSON_PARSER_DEF Json_Parser json_parser(void);
+JSON_PARSER_DEF Json_Parser json_parser(Json_Parser_On_Elem on_elem, Json_Parser_On_Object_Elem on_object_elem, Json_Parser_On_Array_Elem on_array_elem, void *arg);
 JSON_PARSER_DEF Json_Parser_Ret json_parser_consume(Json_Parser *parser, const char *data, size_t size);
 
 // Private
@@ -129,10 +141,14 @@ static char *json_parser_const_cstrs[JSON_PARSER_CONST_COUNT] = {
   [JSON_PARSER_CONST_NULL] = "null",
 };
 
-JSON_PARSER_DEF Json_Parser json_parser(void) {
+JSON_PARSER_DEF Json_Parser json_parser(Json_Parser_On_Elem on_elem, Json_Parser_On_Object_Elem on_object_elem, Json_Parser_On_Array_Elem on_array_elem, void *arg) {
   Json_Parser parser = {0};
   parser.state = JSON_PARSER_STATE_IDLE;
+  parser.on_elem = on_elem;
+  parser.on_object_elem = on_object_elem;
+  parser.on_array_elem = on_array_elem;
   parser.stack_size = 0;
+  parser.arg = arg;
   return parser;
 }
 
@@ -156,6 +172,7 @@ JSON_PARSER_DEF Json_Parser_Ret json_parser_consume(Json_Parser *parser, const c
       void **elem = &parser->parent_stack[parser->parent_stack_size];
       if(parser->on_elem) {
 	if(!parser->on_elem(JSON_PARSER_TYPE_OBJECT, NULL, 0, parser->arg, elem)) {
+	  JSON_PARSER_LOG("Failure because 'on_elem' returned false");
 	  return JSON_PARSER_RET_ABORT;
 	}
       }
@@ -174,6 +191,7 @@ JSON_PARSER_DEF Json_Parser_Ret json_parser_consume(Json_Parser *parser, const c
       void **elem = &parser->parent_stack[parser->parent_stack_size];
       if(parser->on_elem) {
 	if(!parser->on_elem(JSON_PARSER_TYPE_ARRAY, NULL, 0, parser->arg, elem)) {
+	  JSON_PARSER_LOG("Failure because 'on_elem' returned false");
 	  return JSON_PARSER_RET_ABORT;
 	}
       }
@@ -227,7 +245,7 @@ JSON_PARSER_DEF Json_Parser_Ret json_parser_consume(Json_Parser *parser, const c
       size--;
       if(size) goto consume;
     } else {
-      fprintf(stderr, "ERROR: Expected JsonValue but found: '%c'\n", data[0]);
+      JSON_PARSER_LOG("Expected JsonValue but found: '%c'", data[0]);
       return JSON_PARSER_RET_ABORT;
     }
 
@@ -269,7 +287,7 @@ JSON_PARSER_DEF Json_Parser_Ret json_parser_consume(Json_Parser *parser, const c
       
       return JSON_PARSER_RET_SUCCESS;
     } else {
-      fprintf(stderr, "ERROR: Expected termination of JsonObject or a JsonString: '%c'\n", data[0]);
+      JSON_PARSER_LOG("Expected termination of JsonObject or a JsonString: '%c'", data[0]);
       return JSON_PARSER_RET_ABORT;
     }
 
@@ -295,7 +313,7 @@ JSON_PARSER_DEF Json_Parser_Ret json_parser_consume(Json_Parser *parser, const c
       size--;
       if(size) goto consume;
     } else {
-      fprintf(stderr, "ERROR: Expected ':' between JsonString and JsonValue but found: '%c'\n", data[0]);
+      JSON_PARSER_LOG("Expected ':' between JsonString and JsonValue but found: '%c'", data[0]);
       return JSON_PARSER_RET_ABORT;
     }
 
@@ -331,7 +349,7 @@ JSON_PARSER_DEF Json_Parser_Ret json_parser_consume(Json_Parser *parser, const c
       
       return JSON_PARSER_RET_SUCCESS;
     } else {
-      fprintf(stderr, "ERROR: Expected ',' or the termination of JsonObject but found: '%c'\n", data[0]);
+      JSON_PARSER_LOG("Expected ',' or the termination of JsonObject but found: '%c'", data[0]);
       return JSON_PARSER_RET_ABORT;
     }
     
@@ -348,7 +366,7 @@ JSON_PARSER_DEF Json_Parser_Ret json_parser_consume(Json_Parser *parser, const c
       size--;
       if(size) goto object_key;
     } else if( data[0] != '\"') {
-      fprintf(stderr, "ERROR: Expected JsonString but found: '%c'\n", data[0]);
+      JSON_PARSER_LOG("Expected JsonString but found: '%c'", data[0]);
       return JSON_PARSER_RET_ABORT;
     } else {
       assert(parser->stack_size < JSON_PARSER_STACK_CAP);
@@ -429,7 +447,7 @@ JSON_PARSER_DEF Json_Parser_Ret json_parser_consume(Json_Parser *parser, const c
 
       return JSON_PARSER_RET_SUCCESS;
     } else {
-      fprintf(stderr, "ERROR: Expected ',' or the termination of JsonArray but found: '%c'\n", data[0]);
+      JSON_PARSER_LOG("Expected ',' or the termination of JsonArray but found: '%c'", data[0]);
       return JSON_PARSER_RET_ABORT;
     }
     return JSON_PARSER_RET_CONTINUE;
@@ -458,6 +476,7 @@ JSON_PARSER_DEF Json_Parser_Ret json_parser_consume(Json_Parser *parser, const c
       void *elem = NULL;
       if(parser->on_elem) {
 	if(!parser->on_elem(JSON_PARSER_TYPE_NUMBER, parser->buffer[JSON_PARSER_BUFFER], parser->buffer_size[JSON_PARSER_BUFFER], parser->arg, &elem)) {
+	  JSON_PARSER_LOG("Failure because 'on_elem' returned false");
 	  return JSON_PARSER_RET_ABORT;
 	}	
       }
@@ -500,6 +519,7 @@ JSON_PARSER_DEF Json_Parser_Ret json_parser_consume(Json_Parser *parser, const c
       void *elem = NULL;
       if(parser->on_elem) {
 	if(!parser->on_elem(JSON_PARSER_TYPE_NUMBER, parser->buffer[JSON_PARSER_BUFFER], parser->buffer_size[JSON_PARSER_BUFFER], parser->arg, &elem)) {
+	  JSON_PARSER_LOG("Failure because 'on_elem' returned false");
 	  return JSON_PARSER_RET_ABORT;
 	}
       }
@@ -533,6 +553,7 @@ JSON_PARSER_DEF Json_Parser_Ret json_parser_consume(Json_Parser *parser, const c
 	   (parser->stack[parser->stack_size-1] !=
 	    JSON_PARSER_STATE_OBJECT_DOTS)) {
 	  if(!parser->on_elem(JSON_PARSER_TYPE_STRING, parser->buffer[JSON_PARSER_BUFFER], parser->buffer_size[JSON_PARSER_BUFFER], parser->arg, &elem)) {
+	    JSON_PARSER_LOG("Failure because 'on_elem' returned false");
 	    return JSON_PARSER_RET_ABORT;
 	  }
 	  
@@ -558,7 +579,7 @@ JSON_PARSER_DEF Json_Parser_Ret json_parser_consume(Json_Parser *parser, const c
       size--;
       
       if(!size) {
-	fprintf(stderr, "ERROR: Expected escaped character in JsonString but found: eof\n");
+	JSON_PARSER_LOG("Expected escaped character in JsonString but found: eof");
 	return JSON_PARSER_RET_ABORT;
       }
 
@@ -575,7 +596,7 @@ JSON_PARSER_DEF Json_Parser_Ret json_parser_consume(Json_Parser *parser, const c
       else if(c == 'r') c = '\r';
       else if(c == 't') c = 't';
       else {
-	fprintf(stderr, "ERROR: Escape-haracter: '%c' is not supported in JsonString\n", c);
+	JSON_PARSER_LOG("Escape-haracter: '%c' is not supported in JsonString", c);
 	return JSON_PARSER_RET_ABORT;
       }
 
@@ -607,7 +628,7 @@ JSON_PARSER_DEF Json_Parser_Ret json_parser_consume(Json_Parser *parser, const c
       size--;
       if(size) goto _string;
     } else {
-      fprintf(stderr, "ERROR: Expected termination of JsonString but found: '%c'\n", data[0]);
+      JSON_PARSER_LOG("Expected termination of JsonString but found: '%c'", data[0]);
       return JSON_PARSER_RET_ABORT;
     }
 
@@ -634,6 +655,7 @@ JSON_PARSER_DEF Json_Parser_Ret json_parser_consume(Json_Parser *parser, const c
 	}
 
 	if(!parser->on_elem(type, NULL, 0, parser->arg, &elem)) {
+	  JSON_PARSER_LOG("Failure because 'on_elem' returned false");
 	  return JSON_PARSER_RET_ABORT;
 	}
       }
@@ -657,8 +679,7 @@ JSON_PARSER_DEF Json_Parser_Ret json_parser_consume(Json_Parser *parser, const c
       parser->konst_index++;
       if(size) goto konst;
     } else {
-      fprintf(stderr,
-	      "ERROR: Expected 'true', 'false' or 'null'. The string was not terminated correctly with: '%c'.\n"
+      JSON_PARSER_LOG("Expected 'true', 'false' or 'null'. The string was not terminated correctly with: '%c'.\n"
 	      "       Correct would be '%c'.", data[0], json_parser_const_cstrs[parser->konst][parser->konst_index]);
       return JSON_PARSER_RET_ABORT;
     }
@@ -666,9 +687,9 @@ JSON_PARSER_DEF Json_Parser_Ret json_parser_consume(Json_Parser *parser, const c
     return JSON_PARSER_RET_CONTINUE;
   } break;
   default: {
-    fprintf(stderr, "ERROR: unknown state in json_parser_consume");
-    exit(1);
-  }
+    JSON_PARSER_LOG("unknown state in json_parser_consume");
+    return JSON_PARSER_RET_ABORT;
+  } break;
   }
 }
 
@@ -689,14 +710,19 @@ JSON_PARSER_DEF bool json_parser_on_parent(Json_Parser *parser, void *elem) {
       state == JSON_PARSER_STATE_OBJECT_COMMA ||
       state == JSON_PARSER_STATE_OBJECT_KEY) &&
      parser->on_object_elem) {	
-    if(!parser->on_object_elem(parent, parser->buffer[JSON_PARSER_KEY_BUFFER], parser->buffer_size[JSON_PARSER_KEY_BUFFER], elem, parser->arg))
+    if(!parser->on_object_elem(parent, parser->buffer[JSON_PARSER_KEY_BUFFER], parser->buffer_size[JSON_PARSER_KEY_BUFFER], elem, parser->arg)) {
+      JSON_PARSER_LOG("Failure because 'on_object_elem' returned false");
       return false;
+      
+    }
 	
   } else if( (state == JSON_PARSER_STATE_ARRAY ||
 	      state == JSON_PARSER_STATE_ARRAY_COMMA) &&
 	     parser->on_array_elem) {	
-    if(!parser->on_array_elem(parent, elem, parser->arg))
-      return false;
+    if(!parser->on_array_elem(parent, elem, parser->arg)) {
+      JSON_PARSER_LOG("Failure because 'on_array_elem' returned false");
+      return false;      
+    }
   }
 
   return true;

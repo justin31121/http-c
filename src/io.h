@@ -69,6 +69,7 @@ IO_DEF int io_file_fseek(Io_File *file, long offset, int whence);
 IO_DEF long io_file_ftell(Io_File *file);
 
 IO_DEF bool io_getenv(const char *name, char *buffer, size_t buffer_cap);
+
 IO_DEF bool io_slurp_file(const char *name, char **bufer, size_t *buffer_size);
 IO_DEF bool io_write_file_len(const char *name, char *bufer, size_t buffer_size);
 

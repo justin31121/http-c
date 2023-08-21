@@ -66,7 +66,7 @@ typedef struct{
 // Public
 HTTP_PARSER_DEF Http_Parser http_parser(Http_Parser_Write_Callback callback, Http_Parser_Header_Callback, void *userdata);
 HTTP_PARSER_DEF Http_Parser_Ret http_parser_consume(Http_Parser *parser, const char *data, size_t size);
-HTTP_PARSER_DEF bool http_parser_dumb(void *userdata, Http_Parser_String key, Http_Parser_String value);
+HTTP_PARSER_DEF bool http_parser_dump(void *userdata, Http_Parser_String key, Http_Parser_String value);
 
 // Private
 HTTP_PARSER_DEF Http_Parser_Ret http_parser_consume_headers(Http_Parser *parser, Http_Parser_String s);
@@ -169,7 +169,7 @@ HTTP_PARSER_DEF Http_Parser_Ret http_parser_consume_headers(Http_Parser *parser,
   return HTTP_PARSER_RET_CONTINUE;
 }
 
-HTTP_PARSER_DEF bool http_parser_dumb(void *userdata, Http_Parser_String key, Http_Parser_String value) {
+HTTP_PARSER_DEF bool http_parser_dump(void *userdata, Http_Parser_String key, Http_Parser_String value) {
   (void) userdata;
   fprintf(stderr, "%.*s: %.*s\n", (int) key.len, key.data, (int) value.len, value.data); fflush(stderr);
   return true;
