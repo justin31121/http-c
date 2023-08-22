@@ -149,7 +149,7 @@ bool on_object_elem_access_token(void *object, const char *key_data, size_t key_
 }
 
 bool get_access_token(const char *spotify_creds, Region *temp, string *access_token) {
-  Region_Ptr current = region_current(*temp);
+  Region_Ptr current = region_current(temp);
   
   string creds;
   if(!string_alloc(&creds, temp, spotify_creds))
@@ -178,13 +178,8 @@ bool get_access_token(const char *spotify_creds, Region *temp, string *access_to
   ctx.region = temp;
   ctx.out = (string) {0};
 
-  Json_Parser jparser = json_parser();
-  jparser.on_elem = on_elem_access_token;
-  jparser.on_object_elem = on_object_elem_access_token;
-  jparser.arg = &ctx;
-  Http_Parser parser =
-    http_parser((Http_Parser_Write_Callback) json_parser_consume, NULL, &jparser);
-
+  Json_Parser jparser = json_parser(on_elem_access_token, on_object_elem_access_token, NULL, &ctx);
+  Http_Parser parser = http_parser((Http_Parser_Write_Callback) json_parser_consume, NULL, &jparser);
   region_rewind(temp, current);
   const char *body = "grant_type=client_credentials";
   if(http_request(&http, "/api/token", "POST",
@@ -308,7 +303,8 @@ void dump_results(Json json) {
 
 bool search_keyword(const char *keyword, string access_token, Region *temp, Json *out) {
 
-    Region_Ptr current = region_current(*temp);
+    Region_Ptr current = region_current(temp);
+    
 
     string input_encoded;
     if(!string_map_cstr(&input_encoded, temp, keyword, url_encode))
@@ -335,11 +331,7 @@ bool search_keyword(const char *keyword, string access_token, Region *temp, Json
 
     Json_Ctx ctx = { NULL, false };
 
-    Json_Parser jparser = json_parser();
-    jparser.on_elem = on_elem_json;
-    jparser.on_object_elem = on_object_elem_json;
-    jparser.on_array_elem = on_array_elem_json;
-    jparser.arg = &ctx;
+    Json_Parser jparser = json_parser(on_elem_json, on_object_elem_json, on_array_elem_json, &ctx);
   
     Http_Parser parser =
 	http_parser( (Http_Parser_Write_Callback) json_parser_consume, NULL, &jparser );

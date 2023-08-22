@@ -6,7 +6,7 @@
 #include <stdbool.h>
 
 #if !defined(REGION_PADDED) && !defined(REGION_LINEAR)
-#  define REGION_PADDED
+#  define REGION_LINEAR
 #endif
 
 #if !defined(REGION_DYNAMIC) && !defined(REGION_STATIC)
@@ -31,7 +31,7 @@ typedef struct{
 
 typedef struct{
   Region  *region;  //           REGION_PADDED/REGION_LINEAR
-  uint64_t offset;  // Offset in words      /bytes
+  uint64_t offset;  // Offset in bytes
 }Region_Ptr;
 
 // Public
@@ -41,7 +41,7 @@ REGION_DEF void region_free(Region *region);
 
 // 'Constant' Ptrs
 void *region_base(Region region);
-Region_Ptr region_current(Region region);
+Region_Ptr region_current(Region *region);
 
 void region_flush(Region *region);
 void region_rewind(Region *region, Region_Ptr ptr);
@@ -69,26 +69,36 @@ typedef bool (*string_map_func)(const char *input, size_t input_size, char *buff
 // Public
 REGION_DEF bool string_alloc(string *s, Region *region, const char *cstr);
 REGION_DEF bool string_alloc2(string *s, Region *region, const char *cstr, size_t cstr_len);
+REGION_DEF bool string_cstr_alloc(const char **cstr, Region *region, string s);
 REGION_DEF bool string_copy(string *s, Region *region, string t);
 REGION_DEF bool string_snprintf(string *s, Region *region, const char *fmt, ...);
 REGION_DEF bool string_map(string *s, Region *region, string input, string_map_func map_func);
 REGION_DEF bool string_map_cstr(string *s, Region *region, const char *cstr, string_map_func map_func);
 REGION_DEF bool string_map_impl(string *s, Region *regon, const char *cstr, size_t cstr_len, string_map_func map_fun);
 
+REGION_DEF int string_index_of(string s, const char *needle);
+REGION_DEF int string_last_index_of(string s, const char *needle);
+REGION_DEF int string_index_of_off(string s, size_t off, const char *needle);
+REGION_DEF bool string_substring(string s, size_t start, size_t len, string *d);
+
+REGION_DEF bool string_chop_by(string *s, const char *delim, string *d);
+
 REGION_DEF bool string_eq(string s, const char* cstr);
 
+//MACROS
+const char *string_to_cstr(string s);
+string string_from_cstr(const char* cstr);
 bool str_empty(string s);
 
 #endif //REGION_NO_STRING
 
 #ifdef REGION_IMPLEMENTATION
 
-
-#define region_base(region) ( (region).data )
-#define region_deref(ptr) ( ((ptr).region)->data + (ptr).offset )
+#define region_base(region) ( (region)->data )
+#define region_deref(ptr) ( (*(unsigned char **) ((ptr).region) ) + (ptr).offset )
 #define region_rewind(region, ptr) (region)->length = (ptr).offset
 #define region_flush(region) (region)->length = 0
-#define region_current(r) (Region_Ptr) { .region = &(r), .offset = (r).length }
+#define region_current(r) (Region_Ptr) { .region = (r), .offset = (r)->length }
 
 REGION_DEF bool region_init(Region *region, uint64_t capacity_bytes) {
 #if   defined(REGION_PADDED)
@@ -150,7 +160,7 @@ REGION_DEF bool region_alloc(Region_Ptr *ptr, Region *region, uint64_t size_byte
     }
 
     ptr->region = region;
-    ptr->offset = region->length;
+    ptr->offset = sizeof(*region->data) * region->length;
     
     region->length += size_words;
 
@@ -176,7 +186,7 @@ REGION_DEF bool region_alloc(Region_Ptr *ptr, Region *region, uint64_t size_byte
 #endif
     }
 
-    ptr->region = (Region *) region;
+    ptr->region = region;
     ptr->offset = region->length;
     
     region->length += size_bytes;
@@ -201,6 +211,9 @@ REGION_DEF void region_free(Region *region) {
 
 #ifndef REGION_NO_STRING
 
+#define string_from_cstr(cstr) (string) { (Region_Ptr) { (Region *) &(cstr), 0}, strlen((cstr)) }
+#define string_to_cstr(s) ((char *) (memcpy(memset(_alloca(s.len + 1), 0, s.len + 1), region_deref(s.data), s.len)) )
+#define string_substring_impl(s, start, len) (string) { .data = (Region_Ptr) { .region = s.data.region, .offset = s.data.offset + start}, .len = len}
 #define str_empty(s) ((s).len == 0)
 
 REGION_DEF bool string_alloc(string *s, Region *region, const char *cstr) {
@@ -223,6 +236,7 @@ REGION_DEF bool string_snprintf(string *s, Region *region, const char *fmt, ...)
   va_end(args);
   if(!region_alloc(&s->data, region, s->len)) return false;
   vsnprintf( (char *const) region_deref(s->data), s->len, fmt, args_copy);
+  if(s->len) s->len--;
   return true;
 }
 
@@ -245,6 +259,114 @@ REGION_DEF bool string_map_impl(string *s, Region *region,
   return true;  
 }
 
+static int string_index_of_impl(const char *haystack, size_t haystack_size, const char* needle, size_t needle_size) {
+  if(needle_size > haystack_size) {
+    return -1;
+  }
+  haystack_size -= needle_size;
+  size_t i, j;
+  for(i=0;i<=haystack_size;i++) {
+    for(j=0;j<needle_size;j++) {
+      if(haystack[i+j] != needle[j]) {
+	break;
+      }
+    }
+    if(j == needle_size) {
+      return (int) i;
+    }
+  }
+  return -1;
+
+}
+
+REGION_DEF int string_index_of(string s, const char *needle) {
+
+  const char *haystack = (const char *) region_deref(s.data);
+  size_t haystack_size = s.len;
+
+  return string_index_of_impl(haystack, haystack_size, needle, strlen(needle));
+}
+
+REGION_DEF int string_index_of_off(string s, size_t off, const char *needle) {
+
+  if(off > s.len) {
+    return -1;
+  }
+
+  const char *haystack = (const char *) region_deref(s.data);
+  size_t haystack_size = s.len;
+  
+  int pos = string_index_of_impl(haystack + off, haystack_size - off, needle, strlen(needle));
+  if(pos < 0) {
+    return -1;
+  }
+
+  return pos + (int) off;
+}
+
+static int string_last_index_of_impl(const char *haystack, size_t haystack_size, const char* needle, size_t needle_size) {
+
+  if(needle_size > haystack_size) {
+    return -1;
+  }
+  
+  int i;
+
+  for(i=haystack_size - needle_size - 1;i>=0;i--) {
+    size_t j;
+    for(j=0;j<needle_size;j++) {
+      if(haystack[i+j] != needle[j]) {
+	break;
+      }
+    }
+    if(j == needle_size) {
+      return i;
+    }
+  }
+  
+  return -1;
+}
+
+REGION_DEF int string_last_index_of(string s, const char *needle) {
+  const char *haystack = (const char *) region_deref(s.data);
+  size_t haystack_size = s.len;
+
+  return string_last_index_of_impl(haystack, haystack_size, needle, strlen(needle));
+}
+
+REGION_DEF bool string_substring(string s, size_t start, size_t len, string *d) {
+
+  if(start > s.len) {
+    return false;
+  }
+
+  if(start + len > s.len) {
+    return false;
+  }
+
+  *d = string_substring_impl(s, start, len);
+  
+  return true;
+}
+
+REGION_DEF bool string_chop_by(string *s, const char *delim, string *d) {
+  if(!s->len) return false;
+  
+  int pos = string_index_of(*s, delim);
+  if(pos < 0) pos = (int) s->len;
+    
+  if(d && !string_substring(*s, 0, pos, d))
+    return false;
+
+  if(pos == (int) s->len) {
+    s->len = 0;
+    return false;
+  } else {
+    return string_substring(*s, pos + 1, s->len - pos - 1, s);
+  }
+
+}
+
 REGION_DEF bool string_map(string *s, Region *region, string input, string_map_func map_func) {
   return string_map_impl(s, region, (const char *) region_deref(input.data), input.len, map_func);
 }
@@ -258,6 +380,16 @@ REGION_DEF bool string_alloc2(string *s, Region *region, const char *cstr, size_
     if(!region_alloc(&s->data, region, s->len)) return false;
     memcpy( region_deref(s->data), cstr, s->len);
     return true;
+}
+
+REGION_DEF bool string_cstr_alloc(const char **cstr, Region *region, string s) {
+  Region_Ptr ptr;
+  if(!region_alloc(&ptr, region, s.len + 1)) return false;
+  unsigned char *data = region_deref(ptr);
+  memcpy( data, region_deref(s.data), s.len);
+  data[s.len] = 0;
+  *cstr = (const char *) data;
+  return true;
 }
 
 REGION_DEF bool string_copy(string *s, Region *region, string t) {
