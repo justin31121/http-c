@@ -642,7 +642,7 @@ HTTP_DEF bool http_socket_write(const char *data, size_t size, void *_http) {
 
 		// ssl_write error
 		// TODO: maybe handle other errors
-		return false;	
+		return false;
 	    }
 	} else {
 
@@ -760,6 +760,8 @@ HTTP_DEF bool http_socket_read(char *buffer, size_t buffer_size, void *_http, si
     if(!http->conn)
 	return http_socket_read_plain(buffer, buffer_size, http, read);
 
+    *read = 0;
+
     // This loop is needed, for the case that SSL_read returns the error: SSL_ERROR_WANT_READ.
     // In this case we should not close the connection which would be indicated by returning
     // a read of 0. And we should not return false, because there is still data that wants to
@@ -788,7 +790,7 @@ HTTP_DEF bool http_socket_read(char *buffer, size_t buffer_size, void *_http, si
 	} else {
 
 	    // ssl_read success
-	    *read = (size_t) ret;
+	    *read += (size_t) ret;
 	    return true;
 	}
 
