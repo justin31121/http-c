@@ -122,6 +122,7 @@ HTML_PARSER_DEF bool html_parser_attribute(Html_Parser *parser);
 	    return HTML_PARSER_RET_ABORT;				\
 	}								\
 	(parser)->buffer_size[HTML_PARSER_BUFFER] = 0;			\
+	
     }									\
     (parser)->buffer[HTML_PARSER_BUFFER][(parser)->buffer_size[HTML_PARSER_BUFFER]++] = (c)
 
