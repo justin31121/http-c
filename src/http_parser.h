@@ -368,7 +368,7 @@ HTTP_PARSER_DEF Http_Parser_Ret http_parser_consume(Http_Parser *parser, const c
       return HTTP_PARSER_RET_SUCCESS;
     }
 
-    Http_Parser_Ret ret = parser->callback(parser->userdata, data, size);
+    Http_Parser_Ret ret = parser->callback(parser->userdata, data, len);
     if(ret == HTTP_PARSER_RET_ABORT) {
       HTTP_PARSER_LOG("Failure because 'callback' returned HTTP_PARSER_RET_ABORT");
       return HTTP_PARSER_RET_ABORT;
