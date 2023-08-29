@@ -18,16 +18,16 @@
 #  define HTML_PARSER_LOG(...)
 #endif //HTML_PARSER_VERBOSE
 
-typedef bool (*Html_Parser_On_Node)(const char *name, void *arg, void **node);
-typedef bool (*Html_Parser_On_Node_Attribute)(void *node, const char *key, const char *value, void *arg);
-typedef bool (*Html_Parser_On_Node_Child)(void *node, void *child, void *arg);
-typedef bool (*Html_Parser_On_Node_Content)(void *node, const char *content, size_t content_size, void *arg);
-
 typedef enum{
   HTML_PARSER_RET_ABORT = 0,
   HTML_PARSER_RET_CONTINUE = 1,
   HTML_PARSER_RET_SUCCESS = 2,
 }Html_Parser_Ret;
+
+typedef bool (*Html_Parser_On_Node)(const char *name, void *arg, void **node);
+typedef bool (*Html_Parser_On_Node_Attribute)(void *node, const char *key, const char *value, void *arg);
+typedef bool (*Html_Parser_On_Node_Child)(void *node, void *child, void *arg);
+typedef bool (*Html_Parser_On_Node_Content)(void *node, const char *content, size_t content_size, void *arg);
 
 typedef enum{
   //Expect: '<'
@@ -184,7 +184,7 @@ HTML_PARSER_DEF Html_Parser_Ret html_parser_consume(Html_Parser *parser, const c
       if(size) goto consume;
 
       return HTML_PARSER_RET_CONTINUE;
-    } else if(isalpha(data[0])) {
+    } else if(isalpha(data[0]) || data[0] == '!') {
       parser->buffer_size[HTML_PARSER_BUFFER] = 0;
       parser->prev = parser->state;
       parser->state = HTML_PARSER_STATE_TAG_NAME;      
@@ -344,7 +344,7 @@ HTML_PARSER_DEF Html_Parser_Ret html_parser_consume(Html_Parser *parser, const c
     if(!size)
       return HTML_PARSER_RET_CONTINUE;
 
-    if(isalpha(data[0]) || data[0] == '-') {
+    if(isalpha(data[0]) || data[0] == '-' || data[0] == '!') {
       html_parser_append(parser, data[0]);
 
       data++;
