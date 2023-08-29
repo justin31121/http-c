@@ -1,13 +1,27 @@
 #include <stdio.h>
 
 #define REGION_IMPLEMENTATION
+#define REGION_STATIC
 #define REGION_LINEAR
 #include "region.h"
 
 #define URL_IMPLEMENTATION
 #include "url.h"
 
+static Region region;
+
+void *region_json_malloc(size_t bytes) {
+  
+  Region_Ptr ptr;
+  if(!region_alloc(&ptr, &region, bytes)) {
+    return NULL;
+  }
+
+  return region_deref(ptr);
+}
+
 #define JSON_IMPLEMENTATION
+#define JSON_MALLOC region_json_malloc
 #include "json.h"
 
 #define JSON_PARSER_IMPLEMENTATION
@@ -15,7 +29,6 @@
 #include "json_parser.h"
 
 #define HTML_PARSER_IMPLEMENTATION
-#define HTML_PARSER_BUFFER_CAP (1024 * 2)
 #define HTML_PARSER_VERBOSE
 #include "html_parser.h"
 
@@ -24,7 +37,6 @@
 #include "http_parser.h"
 
 #define HTTP_IMPLEMENTATION
-#define HTTP_OPEN_SSL
 #define HTTP_VERBOSE
 #include "http.h"
 
@@ -39,7 +51,10 @@ int count = 0;
 
 typedef struct{
     int active;
+    Json_Parser *parser;
     FILE *f;
+
+    bool done;
 }Context;
 
 typedef int64_t Node;
@@ -55,7 +70,7 @@ bool on_node(const char *name, void *arg, void **node) {
 bool on_node_content(void *node, const char *data, size_t size, void *arg) {
 
     static const char *needle = "var ytInitialData = ";
-    size_t needle_len = sizeof(needle) - 1;
+    size_t needle_len = strlen(needle);
 
     Context *context = arg;
     Node n = (Node) node;
@@ -64,95 +79,86 @@ bool on_node_content(void *node, const char *data, size_t size, void *arg) {
 	if(size >= needle_len && strncmp(needle, data, needle_len) == 0) {
 	    context->active = (int) n;
 	}
+	data += needle_len;
+	size -= needle_len;
     }
 
     if((int) n == context->active) {
-      json_parser_consume(context->parser, data, size);
-      //fwrite(data, 1, size, context->f);
+
+      if(!context->done) {	
+	Json_Parser_Ret ret = json_parser_consume(context->parser, data, size);
+	if(ret == JSON_PARSER_RET_ABORT) {
+	  printf("%.*s\n", (int) size, data);
+	  return false;
+	} else if(ret == JSON_PARSER_RET_SUCCESS) {
+	  context->done = true;
+	}
+      }
+
+      fwrite(data, 1, size, context->f);
     }    
     
     return true;
 }
 
 typedef struct{
-    Json *json;
-    bool got_root;
+  Json array;
+  string prev;
+  int state;
+  
+  Region *temp;
+  Region_Ptr snapshot;
 }Json_Ctx;
+
+//youtube_on_elem_results_init
+//youtube_on_object_elem_results_init
 
 bool on_elem_json(Json_Parser_Type type, const char *content, size_t content_size, void *arg, void **elem) {
 
-    Json_Ctx *ctx = (Json_Ctx *) arg;
-  
-    Json *json = malloc(sizeof(Json));
-    if(!json) return false;
-  
-    switch(type) {
-    case JSON_PARSER_TYPE_OBJECT: {
-	json->kind = JSON_KIND_OBJECT;
-	if(!json_object_init(&json->as.objectval)) return false;    
-    } break;
-    case JSON_PARSER_TYPE_STRING: {
-	json->kind = JSON_KIND_STRING;
-	if(!json_string_init2((char **) &json->as.stringval, content, content_size)) return false;
-    } break;
-    case JSON_PARSER_TYPE_NUMBER: {
-	double num = strtod(content, NULL);
-	*json = json_number(num);
-    } break;
-    case JSON_PARSER_TYPE_ARRAY: {
-	json->kind = JSON_KIND_ARRAY;
-	if(!json_array_init(&json->as.arrayval)) return false;        
-    } break;
-    case JSON_PARSER_TYPE_FALSE: {
-	*json = json_false();
-    } break;
-    case JSON_PARSER_TYPE_TRUE: {
-	*json = json_true();
-    } break;
-    case JSON_PARSER_TYPE_NULL: {
-	*json = json_null();
-    } break;
-    default: {
-	printf("INFO: unexpected type: %s\n", json_parser_type_name(type) );
-	return false;
-    }
-    }
+  Json_Ctx *ctx = (Json_Ctx *) arg;
 
-    if(!ctx->got_root) {
-	ctx->json = json;
-	ctx->got_root = true;
-    }
+  if(type == JSON_PARSER_TYPE_STRING) {
 
-    *elem = json;
+    if(!string_alloc2(&ctx->prev, ctx->temp, content, content_size))
+      return false;
+    
+  }
 
-    return true;
+  return true;
 }
 
 bool on_object_elem_json(void *object, const char *key_data, size_t key_size, void *elem, void *arg) {
-    (void) arg;
-    //Json_Ctx *ctx = (Json_Ctx *) arg;
+  Json_Ctx *ctx = (Json_Ctx *) arg;
 
-    Json *json = (Json *) object;
-    Json *smol = (Json *) elem;
-  
-    if(!json_object_append2(json->as.objectval, key_data, key_size, smol)) {
-	return false;
+  if(ctx->state == 0) {
+    const char *videoId = "videoId";
+    size_t videoId_len = strlen("videoId");
+    if(videoId_len != key_size || (strncmp(key_data, videoId, videoId_len) != 0) ) return true;
+    
+    if(json_array_len(ctx->array.as.arrayval) == 0) {
+
+      printf("push: "str_fmt"\n", str_arg(ctx->prev) );
+      region_rewind(ctx->temp, ctx->snapshot);
+      
+      //arr_push(results->videoIds, &results->prev);
+      ctx->state = 0;
     }
+  } else if(ctx->state == 1) {
+    /*
+    if(!string_eq_cstr(key, "title")) return;
+    if(string_eq_cstr(results->prev, "Nutzer haben auch gesehen")) return;
+    arr_push(results->videoIds, &results->prev);
+    results->state = 0;
+    */
+  } else if(ctx->state == 2) {
+    /*
+    if(!string_eq_cstr(key, "videoId")) return;
+    if(results->videoId.len) return;
+    results->videoId = results->prev;
+    */
+  }
 
-    return true;
-}
-
-bool on_array_elem_json(void *array, void *elem, void *arg) {
-    (void) arg;
-
-    Json *json = (Json *) array;
-    Json *smol = (Json *) elem;
-  
-    if(!json_array_append(json->as.arrayval, smol)) {
-	return false;
-    }
-
-    return true;
+  return true;
 }
 
 #define YOUTUBE_HOSTNAME "www.youtube.com"
@@ -167,8 +173,11 @@ int main(int argc, char **argv) {
 
   const char *input_cstr = argv[1];
 
-  Region region;
-  if(!region_init(&region, 1024))
+  if(!region_init(&region, 1024 * 1024 * 100))
+    panic("region_init");
+
+  Region temp;
+  if(!region_init(&temp, 1024 * 10))
     panic("region_init");
 
   string input;
@@ -192,8 +201,16 @@ int main(int argc, char **argv) {
   FILE *f = fopen("rsc\\initialData.json", "wb");
   if(!f)
       panic("fopen");
+
+  Json array;
+  if(!json_array_init(&array.as.arrayval))
+    panic("json_array_init");
   
-  Context context = {-1, f};
+  Json_Ctx ctx = { .array=array, .state=0, .temp=&temp, .snapshot=region_current(&temp)};
+
+  Json_Parser parser_json = json_parser(on_elem_json, on_object_elem_json, NULL, &ctx);
+  
+  Context context = {-1, &parser_json, f, false};
   Html_Parser parser_html = html_parser(on_node, NULL, NULL, on_node_content, &context);
   
   Http_Parser parser_http = http_parser((Http_Parser_Write_Callback) html_parser_consume, NULL, &parser_html);
@@ -207,6 +224,6 @@ int main(int argc, char **argv) {
   fclose(f);
   
   http_free(&http);
-  
+    
   return 0;
 }

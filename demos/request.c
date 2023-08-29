@@ -205,7 +205,7 @@ void dump_results(Json json) {
     if( json_object_has(json.as.objectval, "albums") &&
 	( (albums = json_object_get(json.as.objectval, "albums")),
 	  json_object_has(albums.as.objectval, "items"))  ) {
-	albums = json_object_get(albums.as.objectval, "items");
+      albums = json_object_get(albums.as.objectval, "items");
     }
 
     if( json_object_has(json.as.objectval, "tracks") &&

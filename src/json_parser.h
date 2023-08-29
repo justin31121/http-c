@@ -56,6 +56,12 @@ typedef enum{
   // number
   JSON_PARSER_STATE_NUMBER,
   JSON_PARSER_STATE_NUMBER_DOT,
+
+  // \u1234
+  JSON_PARSER_STATE_ESCAPED_UNICODE,
+
+  // \\"
+  JSON_PARSER_STATE_ESCAPED_CHAR,
   
 }Json_Parser_State;
 
@@ -95,7 +101,7 @@ JSON_PARSER_DEF const char *json_parser_type_name(Json_Parser_Type type) {
 #endif //JSON_PARSER_STACK_CAP
 
 #ifndef JSON_PARSER_BUFFER_CAP
-#  define JSON_PARSER_BUFFER_CAP 1024
+#  define JSON_PARSER_BUFFER_CAP 8192
 #endif //JSON_PARSER_BUFFER_CAP
 
 #define JSON_PARSER_BUFFER 0
@@ -574,45 +580,23 @@ JSON_PARSER_DEF Json_Parser_Ret json_parser_consume(Json_Parser *parser, const c
 	    
       return JSON_PARSER_RET_SUCCESS;
     } else if(data[0] == '\\') {
-      
-      data++;
-      size--;
-      
-      if(!size) {
-	JSON_PARSER_LOG("Expected escaped character in JsonString but found: eof");
-	return JSON_PARSER_RET_ABORT;
-      }
-
-      // TODO: add support for '\u0012'
-
-      char c = data[0];
-
-      if(c == '\"') c = '\"';
-      else if(c == '\\') c = '\\';
-      else if(c == '/') c = '/';
-      else if(c == 'b') c = '\b';
-      else if(c == 'f') c = '\f';
-      else if(c == 'n') c = '\n';
-      else if(c == 'r') c = '\r';
-      else if(c == 't') c = 't';
-      else {
-	JSON_PARSER_LOG("Escape-haracter: '%c' is not supported in JsonString", c);
-	return JSON_PARSER_RET_ABORT;
-      }
 
       assert(parser->buffer_size[JSON_PARSER_BUFFER] < JSON_PARSER_BUFFER_CAP);
-      parser->buffer[JSON_PARSER_BUFFER][parser->buffer_size[JSON_PARSER_BUFFER]++] = c;
+      parser->buffer[JSON_PARSER_BUFFER][parser->buffer_size[JSON_PARSER_BUFFER]++] = data[0];
 
       if(parser->stack_size &&
 	 parser->stack[parser->stack_size-1] == JSON_PARSER_STATE_OBJECT_DOTS) {
 	assert(parser->buffer_size[JSON_PARSER_KEY_BUFFER] < JSON_PARSER_BUFFER_CAP);
-	parser->buffer[JSON_PARSER_KEY_BUFFER][parser->buffer_size[JSON_PARSER_KEY_BUFFER]++] = c;
+	parser->buffer[JSON_PARSER_KEY_BUFFER][parser->buffer_size[JSON_PARSER_KEY_BUFFER]++] = data[0];
       }
-	    
+      
       data++;
       size--;
-      if(size) goto _string;
-      
+
+      parser->state = JSON_PARSER_STATE_ESCAPED_CHAR;
+
+      if(size) goto consume;
+      return JSON_PARSER_RET_CONTINUE;
     } else if( data[0] != '\\') {
 	  
       assert(parser->buffer_size[JSON_PARSER_BUFFER] < JSON_PARSER_BUFFER_CAP);
@@ -680,11 +664,93 @@ JSON_PARSER_DEF Json_Parser_Ret json_parser_consume(Json_Parser *parser, const c
       if(size) goto konst;
     } else {
       JSON_PARSER_LOG("Expected 'true', 'false' or 'null'. The string was not terminated correctly with: '%c'.\n"
-	      "       Correct would be '%c'.", data[0], json_parser_const_cstrs[parser->konst][parser->konst_index]);
+		      "       Correct would be '%c'.", data[0], json_parser_const_cstrs[parser->konst][parser->konst_index]);
       return JSON_PARSER_RET_ABORT;
     }
 
     return JSON_PARSER_RET_CONTINUE;
+  } break;
+  case JSON_PARSER_STATE_ESCAPED_UNICODE: {
+    escaped_char:
+
+    if(!size)
+      return JSON_PARSER_RET_CONTINUE;
+
+    if(parser->konst_index > 0) {
+
+      assert(parser->buffer_size[JSON_PARSER_BUFFER] < JSON_PARSER_BUFFER_CAP);
+      parser->buffer[JSON_PARSER_BUFFER][parser->buffer_size[JSON_PARSER_BUFFER]++] = data[0];
+
+      if(parser->stack_size &&
+	 parser->stack[parser->stack_size-1] == JSON_PARSER_STATE_OBJECT_DOTS) {
+	assert(parser->buffer_size[JSON_PARSER_KEY_BUFFER] < JSON_PARSER_BUFFER_CAP);
+	parser->buffer[JSON_PARSER_KEY_BUFFER][parser->buffer_size[JSON_PARSER_KEY_BUFFER]++] = data[0];
+      }
+
+      parser->konst_index--;
+      data++;
+      size--;
+
+      if(size) goto escaped_char;
+      return JSON_PARSER_RET_CONTINUE;
+    } else {
+      parser->state = JSON_PARSER_STATE_STRING;
+      goto consume;
+    }
+    
+  } break;
+  case JSON_PARSER_STATE_ESCAPED_CHAR: {
+
+    if(!size) return JSON_PARSER_RET_CONTINUE;
+        
+    char c = data[0];
+
+    if(c == '\"') c = '\"';
+    else if(c == '\\') c = '\\';
+    else if(c == '/') c = '/';
+    else if(c == 'b') c = '\b';
+    else if(c == 'f') c = '\f';
+    else if(c == 'n') c = '\n';
+    else if(c == 'r') c = '\r';
+    else if(c == 't') c = 't';
+    else if(c == 'u') {
+      parser->konst_index = 4;
+      parser->state = JSON_PARSER_STATE_ESCAPED_UNICODE;
+
+      assert(parser->buffer_size[JSON_PARSER_BUFFER] < JSON_PARSER_BUFFER_CAP);
+      parser->buffer[JSON_PARSER_BUFFER][parser->buffer_size[JSON_PARSER_BUFFER]++] = c;
+
+      if(parser->stack_size &&
+	 parser->stack[parser->stack_size-1] == JSON_PARSER_STATE_OBJECT_DOTS) {
+	assert(parser->buffer_size[JSON_PARSER_KEY_BUFFER] < JSON_PARSER_BUFFER_CAP);
+	parser->buffer[JSON_PARSER_KEY_BUFFER][parser->buffer_size[JSON_PARSER_KEY_BUFFER]++] = c;
+      }
+	
+      data++;
+      size--;
+
+      if(size) goto consume;
+      return JSON_PARSER_RET_CONTINUE;
+    } else {
+      JSON_PARSER_LOG("Escape-haracter: '%c' is not supported in JsonString", c);
+      return JSON_PARSER_RET_ABORT;
+    }
+
+    assert(parser->buffer_size[JSON_PARSER_BUFFER] < JSON_PARSER_BUFFER_CAP);
+    parser->buffer[JSON_PARSER_BUFFER][parser->buffer_size[JSON_PARSER_BUFFER]++] = c;
+
+    if(parser->stack_size &&
+       parser->stack[parser->stack_size-1] == JSON_PARSER_STATE_OBJECT_DOTS) {
+      assert(parser->buffer_size[JSON_PARSER_KEY_BUFFER] < JSON_PARSER_BUFFER_CAP);
+      parser->buffer[JSON_PARSER_KEY_BUFFER][parser->buffer_size[JSON_PARSER_KEY_BUFFER]++] = c;
+    }
+
+    parser->state = JSON_PARSER_STATE_STRING;
+    data++;
+    size--;
+    if(size) goto consume;
+    return JSON_PARSER_RET_CONTINUE;
+
   } break;
   default: {
     JSON_PARSER_LOG("unknown state in json_parser_consume");

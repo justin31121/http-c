@@ -3,6 +3,16 @@
 
 #include <stdint.h>
 
+#ifndef JSON_MALLOC
+#  include <stdlib.h>
+#  define JSON_MALLOC malloc
+#endif //JSON_MALLOC
+
+#ifndef JSON_FREE
+#  include <stdlib.h>
+#  define JSON_FREE free
+#endif //JSON_FREE
+
 #ifdef JSON_IMPLEMENTATION
 #  define HASHTABLE_IMPLEMENTATION
 #endif //JSON_IMPLEMENTATION
@@ -18,10 +28,21 @@ typedef enum{
   JSON_KIND_OBJECT
 }Json_Kind;
 
-typedef struct{
+#define JSON_ARRAY_PAGE_CAP 64
+
+struct Json_Array_Page {
   void *data;
   uint64_t len;
-  uint64_t cap;
+
+  struct Json_Array_Page *next;
+};
+
+typedef struct Json_Array_Page Json_Array_Page;
+
+typedef struct{
+  uint64_t len;
+  Json_Array_Page *first;
+  Json_Array_Page *current;
 }Json_Array;
 
 typedef void * Json_Object_t;
@@ -101,12 +122,12 @@ static inline uint32_t meiyan(const char *key, int count);
 
 HASHTABLE_DEF bool hashtable_key_init(Hashtable_Key **_k, const char *key, size_t key_len) {
 
-  Hashtable_Key *k = (Hashtable_Key *) malloc(sizeof(Hashtable_Key));
+  Hashtable_Key *k = (Hashtable_Key *) JSON_MALLOC(sizeof(Hashtable_Key));
   if(!k) {
     return false;
   }
   k->len = key_len;
-  k->key = (char *) malloc(sizeof(char) * k->len);
+  k->key = (char *) JSON_MALLOC(sizeof(char) * k->len);
   if(!k->key) {
     return false;
   }
@@ -120,9 +141,9 @@ HASHTABLE_DEF bool hashtable_key_init(Hashtable_Key **_k, const char *key, size_
 }
 
 HASHTABLE_DEF void hashtable_key_free(Hashtable_Key *k) {
-  free(k->key);
+  JSON_FREE(k->key);
   if(k->next) hashtable_key_free(k->next);
-  free(k);
+  JSON_FREE(k);
 }
 
 static inline uint32_t meiyan(const char *key, int count) {
@@ -148,7 +169,7 @@ HASHTABLE_DEF bool hashtable_init(Hashtable *ht, size_t initial_len) {
   }
   ht->len = initial_len;
   ht->count = 0;
-  ht->table = malloc(sizeof(Hashtable_Key*) * ht->len);
+  ht->table = JSON_MALLOC(sizeof(Hashtable_Key*) * ht->len);
   if(!ht->table) {
     return false;
   }
@@ -164,7 +185,13 @@ HASHTABLE_DEF Hashtable_Ret hashtable_add(Hashtable *ht, const char *key, size_t
   if(ht->table[n] == NULL) {
     double f = (double) ht->count / (double) ht->len;
     if(f > ht->growth_treshold ) {
-      printf("HASHTABLE: resizing!\n"); fflush(stdout);
+
+#if 1
+      fprintf(stderr, "ERROR: For now resizing is not supported until I implement it.\n");
+      exit(1);
+#endif
+      
+      //printf("HASHTABLE: resizing!\n"); fflush(stdout);
       if(!hashtable_resize(ht, (size_t) ((double) ht->len * ht->growth_factor) )) {
 	return HASHTABLE_RET_ERROR;
       }
@@ -193,7 +220,7 @@ HASHTABLE_DEF Hashtable_Ret hashtable_add(Hashtable *ht, const char *key, size_t
   ht->table[n]->next = old;
   ht->value = &ht->table[n]->value;
 
-  printf("HASHTABLE: collision\n");
+  //printf("HASHTABLE: collision\n");
   return HASHTABLE_RET_SUCCESS;
 }
 
@@ -223,7 +250,7 @@ HASHTABLE_DEF bool hashtable_resize(Hashtable *ht, size_t new_len) {
   size_t o = ht->len;
   Hashtable_Key **old = ht->table;
   ht->len = new_len;
-  ht->table = malloc(sizeof(Hashtable_Key*) * ht->len);
+  ht->table = JSON_MALLOC(sizeof(Hashtable_Key*) * ht->len);
   if(!ht->table) {
     return false;
   }
@@ -237,7 +264,7 @@ HASHTABLE_DEF bool hashtable_resize(Hashtable *ht, size_t new_len) {
       k = next;
     }
   }
-  free(old);
+  JSON_FREE(old);
   
   return true;
 }
@@ -276,7 +303,7 @@ HASHTABLE_DEF void hashtable_free(Hashtable *ht) {
       hashtable_key_free(ht->table[i]);
     }
   }
-  free(ht->table);  
+  JSON_FREE(ht->table);  
 }
 
 #endif //HASHTABLE_IMPLEMENTATION
@@ -309,13 +336,13 @@ JSON_DEF bool json_string_init(char **string, const char *cstr);
 JSON_DEF bool json_string_init2(char **string, const char *cstr, size_t cstr_len);
 JSON_DEF void json_string_free(char *string);
 
-JSON_DEF bool json_array_init(Json_Array **_array);
+JSON_DEF bool json_array_init(Json_Array **array);
 JSON_DEF bool json_array_append(Json_Array *array, Json *json);
 JSON_DEF void json_array_free(Json_Array *array);
+JSON_DEF Json json_array_get(Json_Array *array, uint64_t pos);
 
 JSON_DEF void json_fprint(FILE *f, Json json);
 
-#define json_array_get(array, pos) *(Json *) ((unsigned char *) (array)->data + sizeof(Json) * (pos));
 #define json_array_len(array) (array)->len
 #define json_object_len(object) ((Hashtable *) (object))->count
 
@@ -344,7 +371,7 @@ JSON_DEF bool json_object_init(Json_Object_t *__ht) {
 
   Hashtable **_ht = (Hashtable **) __ht;
   
-  Hashtable *ht = malloc(sizeof(Hashtable));
+  Hashtable *ht = JSON_MALLOC(sizeof(Hashtable));
   if(!ht) {
     return false;
   }
@@ -401,7 +428,7 @@ JSON_DEF void json_object_free(Json_Object_t *_ht) {
 
 JSON_DEF bool json_string_init(char **string, const char *cstr) {
   size_t cstr_len = strlen(cstr) + 1;
-  *string = malloc(cstr_len);
+  *string = JSON_MALLOC(cstr_len);
   if(!(*string)) {
     return false;
   }
@@ -411,7 +438,7 @@ JSON_DEF bool json_string_init(char **string, const char *cstr) {
 }
 
 JSON_DEF bool json_string_init2(char **string, const char *cstr, size_t cstr_len) {
-  *string = malloc(cstr_len + 1);
+  *string = JSON_MALLOC(cstr_len + 1);
   if(!(*string)) {
     return false;
   }
@@ -421,22 +448,31 @@ JSON_DEF bool json_string_init2(char **string, const char *cstr, size_t cstr_len
 }
 
 JSON_DEF void json_string_free(char *string) {
-  free(string);
+  JSON_FREE(string);
 }
     
 JSON_DEF bool json_array_init(Json_Array **_array) {
-  
-  Json_Array *array = (Json_Array *) malloc(sizeof(Json_Array));
+
+  Json_Array *array = JSON_MALLOC(sizeof(Json_Array));
   if(!array) {
     return false;
   }
-    
-  array->len  =  0;
-  array->cap  = 16;
-  array->data = malloc( array->cap * sizeof(Json) );
-  if(!array->data) {
+
+  Json_Array_Page *page = JSON_MALLOC(sizeof(Json_Array_Page));
+  if(!page) {
     return false;
   }
+  
+  page->len = 0;
+  page->next = NULL;
+  page->data = JSON_MALLOC( JSON_ARRAY_PAGE_CAP * sizeof(Json) );
+  if(!page->data) {
+    return false;
+  }
+
+  array->len = 0;
+  array->first = page;
+  array->current = page;
 
   *_array = array;
 
@@ -444,21 +480,70 @@ JSON_DEF bool json_array_init(Json_Array **_array) {
 }
 
 JSON_DEF bool json_array_append(Json_Array *array, Json *json) {
-  if( array->len >= array->cap ) {
-    array->cap *= 2;
-    array->data = realloc(array->data, array->cap * sizeof(Json));
-    if(!array->data) {
+
+  Json_Array_Page *page = array->current;
+  if(page->len >= JSON_ARRAY_PAGE_CAP) {
+    //append new page
+
+    Json_Array_Page *new_page = JSON_MALLOC(sizeof(Json_Array_Page));
+    if(!new_page) {
       return false;
     }
-  }
-  void *ptr = (unsigned char *) array->data + sizeof(Json) * array->len++;
-  memcpy(ptr, json, sizeof(Json));
+  
+    new_page->len = 0;
+    new_page->next = NULL;
+    new_page->data = JSON_MALLOC( JSON_ARRAY_PAGE_CAP * sizeof(Json) );
+    if(!new_page->data) {
+      return false;
+    }
 
+    page->next = new_page;
+    array->current= new_page;
+    page = new_page;
+  }
+
+  void *ptr = (unsigned char *) page->data + sizeof(Json) * page->len++;
+  memcpy(ptr, json, sizeof(Json));
+  array->len++;
+  
   return true;
 }
 
 JSON_DEF void json_array_free(Json_Array *array) {
-  free(array->data);
+
+  Json_Array_Page *page = array->first;
+  while(page) {
+    Json_Array_Page *next_page = page->next;
+    JSON_FREE(page->data);
+    JSON_FREE(page);
+    page = next_page;
+  }
+  
+  JSON_FREE(array);
+}
+
+// 10
+
+//  9 / 4 = 2
+//  9 % 4 = 2
+
+//    indices  -->
+//   
+//   [0] [1] [2] [3]
+//    0   1   2   3  [0]
+//    4   5   6   7  [1]    slots
+//    8   9  10  11  [2]      |
+//   12  13  14  15  [3]      v
+//   13  14  15  16  [4]
+
+JSON_DEF Json json_array_get(Json_Array *array, uint64_t pos) {
+  uint64_t slot = pos / JSON_ARRAY_PAGE_CAP;
+  uint64_t index = pos % JSON_ARRAY_PAGE_CAP;
+
+  Json_Array_Page *page = array->first;
+  for(uint64_t i=0;i<slot;i++) page = page->next;
+
+  return *(Json *) ( ((unsigned char *) page->data) + sizeof(Json) * index);
 }
 
 JSON_DEF bool json_object_fprint(char *key, size_t key_len, Json *json, size_t index, void *_userdata) {
