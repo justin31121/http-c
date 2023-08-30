@@ -17,16 +17,27 @@
 #  define REGION_DEF static inline
 #endif //REGION_DEF
 
+#ifdef REGION_VERBOSE
+#  include <stdio.h>
+#  define REGION_LOG(...) do{ fflush(stdout); fprintf(stderr, "REGION: " __VA_ARGS__); fprintf(stderr, "\n"); fflush(stderr); } while(0)
+#else
+#  define REGION_LOG(...)
+#endif //REGION_VERBOSE
+
 #define REGION_WORD_SIZE sizeof(uintptr_t)
 
 typedef struct{
 #if   defined(REGION_PADDED)
-    uintptr_t *data;
+  uintptr_t *data;
 #elif defined(REGION_LINEAR)
-    unsigned char *data;
-#endif                 //             REGION_PADDED/REGION_LINEAR
-    uint64_t capacity; // Capacity in words        /bytes 
-    uint64_t length;   // Length   in words        /bytes
+  unsigned char *data;
+#endif                 //     REGION_PADDED/REGION_LINEAR
+  uint64_t capacity;   // Capacity in words/bytes 
+  uint64_t length;     // Length   in words/bytes
+
+#ifdef REGION_DIAGNOSTICS
+  uint64_t max_length;
+#endif //REGION_DIAGNOSTICS
 }Region;
 
 typedef struct{
@@ -83,7 +94,9 @@ REGION_DEF bool string_substring(string s, size_t start, size_t len, string *d);
 
 REGION_DEF bool string_chop_by(string *s, const char *delim, string *d);
 
-REGION_DEF bool string_eq(string s, const char* cstr);
+REGION_DEF bool string_eq_cstr(string s, const char* cstr);
+REGION_DEF bool string_eq_cstr2(string s, const char *cstr, size_t cstr_len);
+REGION_DEF bool string_eq_string(string s, string t);
 
 //MACROS
 const char *string_to_cstr(string s);
@@ -100,111 +113,199 @@ bool str_empty(string s);
 #define region_flush(region) (region)->length = 0
 #define region_current(r) (Region_Ptr) { .region = (r), .offset = (r)->length }
 
+#ifdef REGION_LINEAR
+#  define region_cap(r) ((r)->capacity)
+#else#elif defined(REGION_PADDED)
+#  define region_cap(r) ((r)->capacity * REGION_WORD_SIZE)
+#endif
+
+#ifdef REGION_LINEAR
+#  ifdef REGION_DIAGNOSTICS
+#    define region_len(r) ((r)->max_length)
+#  else
+#    define region_len(r) ((r)->length)
+#  endif //REGION_DIAGNOSTICS
+#else#elif defined(REGION_PADDED)
+#  ifdef REGION_DIAGNOSTICS
+#    define region_len(r) ((r)->max_length * REGION_WORD_SIZE)
+#  else
+#    define region_len(r) ((r)->length * REGION_WORD_SIZE)
+#  endif //REGION_DIAGNOSTICS
+#endif
+
 REGION_DEF bool region_init(Region *region, uint64_t capacity_bytes) {
+
+#ifdef REGION_DIAGNOSTICS
+  region->max_length = 0;
+#endif //REGION_DIAGNOSTICS
+  
 #if   defined(REGION_PADDED)
     
-    size_t capacity_words = (capacity_bytes + REGION_WORD_SIZE - 1) / REGION_WORD_SIZE;
+  size_t capacity_words = (capacity_bytes + REGION_WORD_SIZE - 1) / REGION_WORD_SIZE;
 
-    uintptr_t *data = (uintptr_t *) malloc(capacity_words * REGION_WORD_SIZE);
-    if(!data) {
-	return false;
-    }
+  uintptr_t *data = (uintptr_t *) malloc(capacity_words * REGION_WORD_SIZE);
+  if(!data) {
+    REGION_LOG("Failed to initialize region");
+    return false;
+  }
 
-    region->data    =  data;
-    region->length   = 0;
-    region->capacity = capacity_words;
+  region->data    =  data;
+  region->length   = 0;
+  region->capacity = capacity_words;
     
-    return true;
+  return true;
     
 #elif defined(REGION_LINEAR)
     
-    unsigned char *data = (unsigned char *) malloc(capacity_bytes);
-    if(!data) {
-	return false;
-    }
+  unsigned char *data = (unsigned char *) malloc(capacity_bytes);
+  if(!data) {
+    REGION_LOG("Failed to initialize region");
+    return false;
+  }
 
-    region->data    =  data;
-    region->length   = 0;
-    region->capacity = capacity_bytes;
+  region->data    =  data;
+  region->length   = 0;
+  region->capacity = capacity_bytes;
     
-    return true;
+  return true;
 #else
     
-    (void) region;
-    (void) capacity_bytes;
-    return false;
+  (void) region;
+  (void) capacity_bytes;
+  return false;
     
 #endif    
 }
 
 REGION_DEF bool region_alloc(Region_Ptr *ptr, Region *region, uint64_t size_bytes) {
 #if   defined(REGION_PADDED)
-    size_t size_words = (size_bytes + REGION_WORD_SIZE - 1) / REGION_WORD_SIZE;
+  size_t size_words = (size_bytes + REGION_WORD_SIZE - 1) / REGION_WORD_SIZE;
     
-    size_t needed_capacity = region->length + size_words;
-    // Realloc words if necessary
-    if(needed_capacity > region->capacity) {
+  size_t needed_capacity = region->length + size_words;
+  // Realloc words if necessary
+  if(needed_capacity > region->capacity) {
 #if   defined(REGION_DYNAMIC)
-	size_t new_capacity = region->capacity * 2;
-	while( new_capacity < needed_capacity ) new_capacity *= 2;
-	region->capacity = new_capacity;
-	region->data = realloc(region->data, region->capacity * REGION_WORD_SIZE);
-	if(!region->data) {
-	    return false;
-	}
-#elif defined(REGION_STATIC)
-	return false;
-#else	
-	return false;
-#endif
-    }
+    size_t new_capacity = region->capacity * 2;
+    while( new_capacity < needed_capacity ) new_capacity *= 2;
 
-    ptr->region = region;
-    ptr->offset = sizeof(*region->data) * region->length;
+#ifdef REGION_VERBOSE
+
+    void *old_data = region->data;
+    size_t old_capacity = region->capacity;
+
+#endif REGION_VERBOSE
     
-    region->length += size_words;
+    region->capacity = new_capacity;
+    region->data = realloc(region->data, region->capacity * REGION_WORD_SIZE);
 
-    return true;
+    REGION_LOG("Reallocating from %zu to %zu bytes.\n"
+	       "    data: %p -> %p",
+	       (old_capacity * REGION_WORD_SIZE), (region->capacity * REGION_WORD_SIZE),
+	       old_data, (void *) region->data);
+    
+    if(!region->data) {
+      
+      REGION_LOG("Failed to allocate %zu bytes. Failed to reallocate memory.\n"
+		 "    capacity: %zu.\n"
+		 "    length:   %zu.\n"
+		 "    configuration: DYNAMIC | PADDED",
+		 size_bytes, region->capacity, region->length);
+      return false;
+    }
+#elif defined(REGION_STATIC)
+    
+    REGION_LOG("Failed to allocate %zu bytes. Exceeded capacity.\n"
+	       "    capacity: %zu.\n"
+	       "    length:   %zu.\n"
+	       "    configuration: STATIC | PADDED",
+	       size_bytes, region->capacity, region->length);
+    return false;
+#else
+    REGION_LOG("This point should be unreachable. Only if you explicity #undef'ined the default region configuration");x
+    return false;
+#endif
+  }
+
+  ptr->region = region;
+  ptr->offset = sizeof(*region->data) * region->length;
+    
+  region->length += size_words;
+
+#ifdef REGION_DIAGNOSTICS
+  if(region->length > region->max_length) region->max_length = region->length;
+#endif //REGION_DIAGNOSTICS
+
+  return true;
     
 #elif defined(REGION_LINEAR)
 
-    size_t needed_capacity = region->length + size_bytes;
-    // Realloc words if necessary
-    if(needed_capacity > region->capacity) {
+  size_t needed_capacity = region->length + size_bytes;
+  // Realloc words if necessary
+  if(needed_capacity > region->capacity) {
 #if   defined(REGION_DYNAMIC)
-	size_t new_capacity = region->capacity * 2;
-	while( new_capacity < needed_capacity ) new_capacity *= 2;
-	region->capacity = new_capacity;
-	region->data = realloc(region->data, region->capacity);
-	if(!region->data) {
-	    return false;
-	}
-#elif defined(REGION_STATIC)
-	return false;
-#else
-	return false;
-#endif
+    size_t new_capacity = region->capacity * 2;
+    while( new_capacity < needed_capacity ) new_capacity *= 2;
+
+#ifdef REGION_VERBOSE
+
+    void *old_data = region->data;
+    size_t old_capacity = region->capacity;
+
+#endif REGION_VERBOSE
+        
+    region->capacity = new_capacity;
+    region->data = realloc(region->data, region->capacity);
+
+    REGION_LOG("Reallocating from %zu to %zu bytes.\n"
+	       "    data: %p -> %p",
+	       old_capacity, region->capacity,
+	       old_data, (void *) region->data);
+    
+    if(!region->data) {
+      REGION_LOG("Failed to allocate %zu bytes. Failed to reallocate memory.\n"
+		 "    capacity: %zu.\n"
+		 "    length:   %zu.\n"
+		 "    configuration: DYNAMIC | LINEAR",
+		 size_bytes, region->capacity, region->length);
+      return false;
     }
+#elif defined(REGION_STATIC)
+    REGION_LOG("Failed to allocate %zu bytes. Exceeded capacity.\n"
+	       "    capacity: %zu.\n"
+	       "    length:   %zu.\n"
+	       "    configuration: STATIC | LINEAR",
+	       size_bytes, region->capacity, region->length);
+    return false;
+#else
+    REGION_LOG("This point should be unreachable. Only if you explicity #undef'ined the default region configuration");x
+    return false;
+#endif
+  }
 
-    ptr->region = region;
-    ptr->offset = region->length;
+  ptr->region = region;
+  ptr->offset = region->length;
     
-    region->length += size_bytes;
+  region->length += size_bytes;
 
-    return true;
+#ifdef REGION_DIAGNOSTICS
+  if(region->length > region->max_length) region->max_length = region->length;
+#endif //REGION_DIAGNOSTICS
+
+  return true;
     
 #else
+  REGION_LOG("This point should be unreachable. Only if you explicity #undef'ined the default region configuration");
 
-    (void) ptr;
-    (void) region;
-    (void) size_bytes;
-    return false;
+  (void) ptr;
+  (void) region;
+  (void) size_bytes;
+  return false;
     
 #endif
 }
 
 REGION_DEF void region_free(Region *region) {
-    free(region->data);
+  free(region->data);
 }
 
 //////////////////////////////////////////////////////////
@@ -241,8 +342,8 @@ REGION_DEF bool string_snprintf(string *s, Region *region, const char *fmt, ...)
 }
 
 REGION_DEF bool string_map_impl(string *s, Region *region,
-			       const char *cstr, size_t cstr_len,
-			       string_map_func map_func) {
+				const char *cstr, size_t cstr_len,
+				string_map_func map_func) {
   s->len = cstr_len;
   if(!region_alloc(&s->data, region, s->len)) return false;
   size_t output_size;
@@ -376,10 +477,10 @@ REGION_DEF bool string_map_cstr(string *s, Region *region, const char *cstr, str
 }
 
 REGION_DEF bool string_alloc2(string *s, Region *region, const char *cstr, size_t cstr_len) {
-    s->len = cstr_len;
-    if(!region_alloc(&s->data, region, s->len)) return false;
-    memcpy( region_deref(s->data), cstr, s->len);
-    return true;
+  s->len = cstr_len;
+  if(!region_alloc(&s->data, region, s->len)) return false;
+  memcpy( region_deref(s->data), cstr, s->len);
+  return true;
 }
 
 REGION_DEF bool string_cstr_alloc(const char **cstr, Region *region, string s) {
@@ -393,17 +494,24 @@ REGION_DEF bool string_cstr_alloc(const char **cstr, Region *region, string s) {
 }
 
 REGION_DEF bool string_copy(string *s, Region *region, string t) {
-    s->len = t.len;
-    if(!region_alloc(&s->data, region, s->len)) return false;
-    memcpy( region_deref(s->data), region_deref(t.data), s->len);
-    return true;  
+  s->len = t.len;
+  if(!region_alloc(&s->data, region, s->len)) return false;
+  memcpy( region_deref(s->data), region_deref(t.data), s->len);
+  return true;  
 }
 
-REGION_DEF bool string_eq(string s, const char* cstr) {
-  size_t cstr_len = strlen(cstr);
+REGION_DEF bool string_eq_cstr(string s, const char* cstr) {
+  return string_eq_cstr2(s, cstr, strlen(cstr));
+}
+
+REGION_DEF bool string_eq_cstr2(string s, const char *cstr, size_t cstr_len) {
   if(s.len != cstr_len) return false;
-  return memcmp( region_deref(s.data), cstr, cstr_len) == 0;
-  
+  return memcmp( region_deref(s.data), cstr, cstr_len) == 0;  
+}
+
+REGION_DEF bool string_eq_string(string s, string t) {
+  if(s.len != t.len) return false;
+  return memcmp( region_deref(s.data), region_deref(t.data), s.len) == 0;
 }
 
 #endif //REGION_NO_STRING

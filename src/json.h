@@ -28,7 +28,9 @@ typedef enum{
   JSON_KIND_OBJECT
 }Json_Kind;
 
-#define JSON_ARRAY_PAGE_CAP 64
+#ifndef JSON_ARRAY_PAGE_CAP
+#  define JSON_ARRAY_PAGE_CAP 32
+#endif //JSON_ARAY_PAGE_CAP
 
 struct Json_Array_Page {
   void *data;
@@ -572,6 +574,7 @@ JSON_DEF void json_fprint(FILE *f, Json json) {
   } break;
   case JSON_KIND_STRING: {
     fprintf(f,"\"%s\"", json.as.stringval);
+
   } break;
   case JSON_KIND_ARRAY: {
     fprintf(f,"[");

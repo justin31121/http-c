@@ -302,13 +302,15 @@ HTTP_DEF bool http_socket_connect_tls(Http *http, const char *hostname) {
     SCHANNEL_CRED cred =
       {
 	.dwVersion = SCHANNEL_CRED_VERSION,
-	.dwFlags = SCH_USE_STRONG_CRYPTO          // use only strong crypto alogorithms
-	| SCH_CRED_AUTO_CRED_VALIDATION  // automatically validate server certificate
-	| SCH_CRED_NO_DEFAULT_CREDS,     // no client certificate authentication
-	.grbitEnabledProtocols = SP_PROT_TLS1_2,  // allow only TLS v1.2
+	.dwFlags =
+	//SCH_USE_STRONG_CRYPTO |          // use only strong crypto alogorithms
+	SCH_CRED_AUTO_CRED_VALIDATION |  // automatically validate server certificate
+	SCH_CRED_NO_DEFAULT_CREDS,     // no client certificate authentication
+	.grbitEnabledProtocols = SP_PROT_TLS1_2,
       };
 
     if (AcquireCredentialsHandleA(NULL, UNISP_NAME_A, SECPKG_CRED_OUTBOUND, NULL, &cred, NULL, NULL, &s->handle, NULL) != SEC_E_OK) {
+      HTTP_LOG("AcquireCredentialsHandleA failed");
       return false;
     }
   }
@@ -368,7 +370,7 @@ HTTP_DEF bool http_socket_connect_tls(Http *http, const char *hostname) {
       // tls handshake completed
       break;
     } else if (sec == SEC_I_INCOMPLETE_CREDENTIALS) {
-      // server asked for client certificate, not supported here
+      HTTP_LOG("Server asked for client certificate, not supported here");
       result = -1;
       break;
     } else if (sec == SEC_I_CONTINUE_NEEDED) {
@@ -378,16 +380,15 @@ HTTP_DEF bool http_socket_connect_tls(Http *http, const char *hostname) {
 
       while (size != 0) {
 	int d = send(s->sock, buffer, size, 0);
-	if (d <= 0)
-	  {
-	    break;
-	  }
+	if (d <= 0) {
+	  break;
+	}
 	size -= d;
 	buffer += d;
       }
       FreeContextBuffer(outbuffers[0].pvBuffer);
       if (size != 0) {
-	// failed to fully send data to server
+	HTTP_LOG("Failed to fully send data to server");
 	result = -1;
 	break;
       }
@@ -396,21 +397,49 @@ HTTP_DEF bool http_socket_connect_tls(Http *http, const char *hostname) {
       // SEC_E_WRONG_PRINCIPAL - bad hostname
       // SEC_E_UNTRUSTED_ROOT - cannot vertify CA chain
       // SEC_E_ILLEGAL_MESSAGE / SEC_E_ALGORITHM_MISMATCH - cannot negotiate crypto algorithms
+#ifdef HTTP_VERBOSE
+
+      if(sec == SEC_E_INSUFFICIENT_MEMORY) {
+	HTTP_LOG("SEC_E_INSUFFICIENT_MEMORY");
+      } else if(sec == SEC_E_INTERNAL_ERROR) {
+	HTTP_LOG("SEC_E_INTERNAL_ERROR");
+      } else if(sec == SEC_E_INVALID_HANDLE) {
+	HTTP_LOG("SEC_E_INVALID_HANDLE");
+      } else if(sec == SEC_E_INVALID_TOKEN) {
+	HTTP_LOG("SEC_E_INVALID_TOKEN");
+      } else if(sec == SEC_E_LOGON_DENIED) {
+	HTTP_LOG("SEC_E_LOGON_DENIED");
+      } else if(sec == SEC_E_NO_AUTHENTICATING_AUTHORITY) {
+	HTTP_LOG("SEC_E_NO_AUTHENTICATING_AUTHORITY");
+      } else if(sec == SEC_E_NO_CREDENTIALS) {
+	HTTP_LOG("SEC_E_NO_CREDENTIALS");
+      } else if(sec == SEC_E_TARGET_UNKNOWN) {
+	HTTP_LOG("SEC_E_TARGET_UNKNOWN");
+      } else if(sec == SEC_E_UNSUPPORTED_FUNCTION) {
+	HTTP_LOG("SEC_E_UNSUPPORTED_FUNCTION");
+      } else if(sec == SEC_E_WRONG_PRINCIPAL) {
+	HTTP_LOG("SEC_E_WRONG_PRINCIPAL");
+      } else {
+	HTTP_LOG("I really dont know why this happens!");
+      }
+
+      
+#endif //HTTP_VERBOSE
       result = -1;
       break;
     }
     // read more data from server when possible
     if (s->received == sizeof(s->incoming)) {
-      // server is sending too much data instead of proper handshake?
+      HTTP_LOG("Server is sending too much data instead of proper handshake?");
       result = -1;
       break;
     }
     int r = recv(s->sock, s->incoming + s->received, sizeof(s->incoming) - s->received, 0);
     if (r == 0) {
-      // server disconnected socket
-      return true;
+      HTTP_LOG("server disconnected socket");
+      return false;
     } else if (r < 0) {
-      // socket error
+      HTTP_LOG("Socket recv-error");
       result = -1;
       break;
     }
