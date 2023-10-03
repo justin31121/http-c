@@ -1,6 +1,6 @@
 #define REGION_IMPLEMENTATION
 #define REGION_LINEAR
-#define REGION_DYNAMIC
+#define REGION_STATIC
 #include "../src/region.h"
 
 #define JSON_IMPLEMENTATION
@@ -8,9 +8,6 @@
 
 #define JSON_PARSER_IMPLEMENTATION
 #include "../src/json_parser.h"
-
-#define HTTP_PARSER_IMPLEMENTATION
-#include "../src/http_parser.h"
 
 #define HTTP_IMPLEMENTATION
 #define HTTP_OPEN_SSL
@@ -26,13 +23,6 @@
 #include "../src/url.h"
 
 #include "../src/common.h"
-
-Http_Parser_Ret region_callback(Region *region, const char *data, size_t size) {
-  Region_Ptr ptr;
-  if(!region_alloc(&ptr, region, size)) return HTTP_PARSER_RET_ABORT;  
-  memcpy( region_deref(ptr), data, size);
-  return HTTP_PARSER_RET_CONTINUE;
-}
 
 typedef struct{
     Json *json;
@@ -166,10 +156,10 @@ bool get_access_token(const char *spotify_creds, Region *temp, string *access_to
 		      "\0", str_arg(creds_base64) ))
     return false;
   
-  ////////////////////////////////////////
+  ///////////////////////////////////////
 
   Http http;
-  if(!http_init(&http, "accounts.spotify.com", HTTPS_PORT, true))
+  if(!http_init("accounts.spotify.com", HTTPS_PORT, true, &http))
     return false;
 
   Access_Token ctx;
@@ -178,17 +168,28 @@ bool get_access_token(const char *spotify_creds, Region *temp, string *access_to
   ctx.region = temp;
   ctx.out = (string) {0};
 
-  Json_Parser jparser = json_parser(on_elem_access_token, on_object_elem_access_token, NULL, &ctx);
-  Http_Parser parser = http_parser((Http_Parser_Write_Callback) json_parser_consume, NULL, &jparser);
+  Json_Parser jparser = json_parser_from(on_elem_access_token, on_object_elem_access_token, NULL, &ctx);
   region_rewind(temp, current);
   const char *body = "grant_type=client_credentials";
-  if(http_request(&http, "/api/token", "POST",
-		  (const unsigned char *) body, (int) strlen(body),
-		  (Http_Write_Callback) http_parser_consume, &parser,
-		  (const char *) region_deref(headers.data) ) != HTTP_RET_SUCCESS) {
+  const char *headers_data = (const char *) region_deref(headers.data);
+
+  Http_Request request;
+  if(!http_request_from(&http, "/api/token", "POST", headers_data,
+		        (const unsigned char *) body, strlen(body),
+			&request)) {
     return false;
   }
 
+  char *data;
+  size_t data_len;
+  while(http_next_body(&request, &data, &data_len)) {
+    if(json_parser_consume(&jparser, data, data_len) != JSON_PARSER_RET_CONTINUE) {
+      break;
+    }
+  }
+
+  assert(ctx.out.len && region_deref(ctx.out.data) );
+  
   http_free(&http);
 
   region_rewind(temp, current);
@@ -326,25 +327,32 @@ bool search_keyword(const char *keyword, string access_token, Region *temp, Json
     region_rewind(temp, current);
 
     Http http;
-    if(!http_init(&http, "api.spotify.com", HTTPS_PORT, true))
+    if(!http_init("api.spotify.com", HTTPS_PORT, true, &http))
 	return false;
 
     Json_Ctx ctx = { NULL, false };
 
-    Json_Parser jparser = json_parser(on_elem_json, on_object_elem_json, on_array_elem_json, &ctx);
+    Json_Parser jparser = json_parser_from(on_elem_json, on_object_elem_json, on_array_elem_json, &ctx);
+
+    const char *url_cstr = (const char *) region_deref(url.data);
+    const char *auth_cstr = (const char *) region_deref(auth.data);
   
-    Http_Parser parser =
-	http_parser( (Http_Parser_Write_Callback) json_parser_consume, NULL, &jparser );
-  
-    if(http_request(&http, (const char *) region_deref(url.data), "GET",
-		    NULL, 0,
-		    (Http_Write_Callback) http_parser_consume, &parser,
-		    (const char *) region_deref(auth.data) ) != HTTP_RET_SUCCESS )
-	return false;
+    Http_Request request;
+    if(!http_request_from(&http, url_cstr, "GET", auth_cstr, NULL, 0, &request)) {
+      return false;
+    }
+
+    char *data;
+    size_t data_len;
+    while(http_next_body(&request, &data, &data_len)) {
+      if(json_parser_consume(&jparser, data, data_len) != JSON_PARSER_RET_CONTINUE) {
+	break;
+      }
+    }
 
     http_free(&http);
   
-    if(parser.response_code != 200 || !ctx.got_root) {
+    if(request.response_code != 200 || !ctx.got_root) {
 	fprintf(stderr,
 		"ERROR: Something failed. Either parsing the request or\n"
 		"       the request itself\n");
@@ -367,7 +375,7 @@ int main(int argc, char **argv) {
   const char *input = argv[1];
 
   Region region;
-  if(!region_init(&region, 1))
+  if(!region_init(&region, 1024))
     panic("region_init");
 
   char spotify_creds[1024];

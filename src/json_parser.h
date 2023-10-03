@@ -133,7 +133,7 @@ typedef struct{
 }Json_Parser;
 
 // Public
-JSON_PARSER_DEF Json_Parser json_parser(Json_Parser_On_Elem on_elem, Json_Parser_On_Object_Elem on_object_elem, Json_Parser_On_Array_Elem on_array_elem, void *arg);
+JSON_PARSER_DEF Json_Parser json_parser_from(Json_Parser_On_Elem on_elem, Json_Parser_On_Object_Elem on_object_elem, Json_Parser_On_Array_Elem on_array_elem, void *arg);
 JSON_PARSER_DEF Json_Parser_Ret json_parser_consume(Json_Parser *parser, const char *data, size_t size);
 
 // Private
@@ -147,7 +147,7 @@ static char *json_parser_const_cstrs[JSON_PARSER_CONST_COUNT] = {
   [JSON_PARSER_CONST_NULL] = "null",
 };
 
-JSON_PARSER_DEF Json_Parser json_parser(Json_Parser_On_Elem on_elem, Json_Parser_On_Object_Elem on_object_elem, Json_Parser_On_Array_Elem on_array_elem, void *arg) {
+JSON_PARSER_DEF Json_Parser json_parser_from(Json_Parser_On_Elem on_elem, Json_Parser_On_Object_Elem on_object_elem, Json_Parser_On_Array_Elem on_array_elem, void *arg) {
   Json_Parser parser = {0};
   parser.state = JSON_PARSER_STATE_IDLE;
   parser.on_elem = on_elem;

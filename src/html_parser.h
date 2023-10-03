@@ -513,9 +513,6 @@ HTML_PARSER_DEF Html_Parser_Ret html_parser_consume(Html_Parser *parser, const c
       goto singleton_close;
     } else if(data[0] == '>') {
 
-      char *buf = parser->buffer[HTML_PARSER_BUFFER];
-      size_t buf_size = parser->buffer_size[HTML_PARSER_BUFFER];
-
       if(parser->noded) {
 	//pass
       } else {

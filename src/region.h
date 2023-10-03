@@ -411,7 +411,7 @@ static int string_last_index_of_impl(const char *haystack, size_t haystack_size,
     return -1;
   }
   
-  int i;
+  size_t i;
 
   for(i=haystack_size - needle_size - 1;i>=0;i--) {
     size_t j;
@@ -421,7 +421,7 @@ static int string_last_index_of_impl(const char *haystack, size_t haystack_size,
       }
     }
     if(j == needle_size) {
-      return i;
+      return (int) i;
     }
   }
   

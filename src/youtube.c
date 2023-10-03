@@ -2,7 +2,6 @@
 
 #define REGION_IMPLEMENTATION
 #define REGION_VERBOSE
-
 #define REGION_STATIC
 #define REGION_LINEAR
 #include "region.h"
@@ -34,12 +33,8 @@ void *region_json_malloc(size_t bytes) {
 #define HTML_PARSER_VERBOSE
 #include "html_parser.h"
 
-#define HTTP_PARSER_IMPLEMENTATION
-#define HTTP_PARSER_VERBOSE
-#include "http_parser.h"
-
 #define HTTP_IMPLEMENTATION
-#define HTTP_VERBOSE
+#define HTTP_OPEN_SSL
 #include "http.h"
 
 #define panic(...) do{				\
@@ -61,6 +56,8 @@ typedef struct{
 typedef int64_t Node;
 
 bool on_node(const char *name, void *arg, void **node) {
+  (void) arg;
+  (void) name;
 
   Node n = (int64_t) count++;
   *node = (void *) n;
@@ -120,12 +117,13 @@ bool on_elem_json(Json_Parser_Type type, const char *content, size_t content_siz
     }
   }
 
-  *elem = (uint64_t *) type;
+  *elem = (void *) (uint64_t) type;
 
   return true;
 }
 
 bool on_object_elem_json(void *object, const char *key_data, size_t key_size, void *elem, void *arg) {
+  (void) object;
   Json_Ctx *ctx = (Json_Ctx *) arg;
 
   Json_Parser_Type type = (uint64_t) elem;
@@ -149,7 +147,7 @@ bool on_object_elem_json(void *object, const char *key_data, size_t key_size, vo
 	size_t prev_len = strlen(prev.as.stringval);
 	
 	if(ctx->prev.len == prev_len &&
-	   strncmp(region_deref(ctx->prev.data), prev.as.stringval, prev_len) == 0 ) {
+	   strncmp((const char *) region_deref(ctx->prev.data), prev.as.stringval, prev_len) == 0 ) {
 	  append = false;
 	}
         
@@ -158,7 +156,7 @@ bool on_object_elem_json(void *object, const char *key_data, size_t key_size, vo
       if(append) {
 	Json json;
 	json.kind = JSON_KIND_STRING;
-	if(!json_string_init2(&json.as.stringval, region_deref(ctx->prev.data), ctx->prev.len)) return false;
+	if(!json_string_init2(&json.as.stringval, (const char *) region_deref(ctx->prev.data), ctx->prev.len)) return false;
 	if(!json_array_append(ctx->array.as.arrayval, &json));
 	
 	ctx->state = 1;
@@ -184,7 +182,7 @@ bool on_object_elem_json(void *object, const char *key_data, size_t key_size, vo
       } else {
 	Json json;
 	json.kind = JSON_KIND_STRING;
-	if(!json_string_init2(&json.as.stringval, region_deref(ctx->prev.data), ctx->prev.len)) return false;
+	if(!json_string_init2(&json.as.stringval, (const char *) region_deref(ctx->prev.data), ctx->prev.len)) return false;
 	if(!json_array_append(ctx->array.as.arrayval, &json));
       
 	ctx->state = 0;
@@ -233,7 +231,7 @@ int main(int argc, char **argv) {
       panic("string_snprintf");
 
     Http http;
-    if(!http_init(&http, YOUTUBE_HOSTNAME, HTTPS_PORT, true))
+    if(!http_init(YOUTUBE_HOSTNAME, HTTPS_PORT, true, &http))
       panic("http_init");
 
     Json array;
@@ -242,20 +240,25 @@ int main(int argc, char **argv) {
   
     Json_Ctx ctx = { .array=array, .state=0, .temp=&region_temp, .snapshot=region_current(&region_temp)};
 
-    Json_Parser parser_json = json_parser(on_elem_json, on_object_elem_json, NULL, &ctx);
+    Json_Parser parser_json = json_parser_from(on_elem_json, on_object_elem_json, NULL, &ctx);
   
     Context context = {-1, &parser_json, false};
     Html_Parser parser_html = html_parser(on_node, NULL, NULL, on_node_content, &context);
-  
-    Http_Parser parser_http = http_parser((Http_Parser_Write_Callback) html_parser_consume, NULL, &parser_html);
 
-    if(http_request(&http, region_deref(route.data), "GET",
-		    NULL, -1,
-		    (Http_Write_Callback) http_parser_consume, &parser_http,
-		    "Connection: Close\r\n") != HTTP_RET_SUCCESS)
-      panic("http_request");
+    Http_Request request;
+    if(!http_request_from(&http, (const char *) region_deref(route.data), "GET", NULL, NULL, 0, &request))
+      panic("http_request_from");
+
+    char *data;
+    size_t data_len;
+    while(http_next_body(&request, &data, &data_len)) {
+      if(html_parser_consume(&parser_html, data, data_len) != HTML_PARSER_RET_CONTINUE) {
+	break;
+      }
+    }
+
   
-    http_free(&http);
+    /* http_free(&http); */
 
     //////////////////////////////////
 

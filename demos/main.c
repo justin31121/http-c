@@ -10,9 +10,6 @@
 #define JSON_PARSER_IMPLEMENTATION
 #include "../src/json_parser.h"
 
-#define HTTP_PARSER_IMPLEMENTATION
-#include "../src/http_parser.h"
-
 #include "../src/common.h"
 
 static string string_root;
@@ -97,22 +94,22 @@ int main() {
 	panic("string_alloc");
     
     Http http;
-    if(!http_init(&http, "dummyjson.com", HTTPS_PORT, true))
+    if(!http_init("dummyjson.com", HTTPS_PORT, true, &http))
 	panic("http_init");
 
-    Json_Parser jparser = json_parser();
-    jparser.on_elem = on_elem;
-    jparser.on_object_elem = on_object_elem;
-    jparser.on_array_elem = on_array_elem;
-    jparser.arg = &region;
+    Json_Parser jparser = json_parser_from(on_elem, on_object_elem, on_array_elem, &region);
   
-    Http_Parser parser = http_parser((Http_Parser_Write_Callback) json_parser_consume, NULL, &jparser);
+    Http_Request request;
+    if(!http_request_from(&http, "/products", "GET", NULL, NULL, 0, &request))
+      panic("http_request_from");
 
-    if(http_request(&http, "/products", "GET",
-		    NULL, 0,
-		    (Http_Write_Callback) http_parser_consume, &parser,
-		    "Connection: Close\r\n") != HTTP_RET_SUCCESS)
-	panic("http_request");
+    char *data;
+    size_t data_len;
+    while(http_next_body(&request, &data, &data_len)) {
+      if(json_parser_consume(&jparser, data, data_len) != JSON_PARSER_RET_CONTINUE) {
+	break;
+      }
+    }
 
     http_free(&http);
 

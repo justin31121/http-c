@@ -5,7 +5,8 @@
 #include "http_parser.h"
 
 #define HTTP_IMPLEMENTATION
-#define HTTP_WIN32_SSL
+//#define HTTP_WIN32_SSL
+#define HTTP_OPEN_SSL
 #include "http.h"
 
 #define THREAD_IMPLEMENTATION
@@ -20,27 +21,20 @@ typedef struct{
   unsigned char *space;
   int64_t off;
   int64_t size;
-  Http_Parser parser;
   const char *error;
 }Slot;
 
-Http_Parser_Ret download_func_callback(void *userdata, const char *data, size_t size) {
-  Slot *s = userdata;
-  memcpy(s->space + s->off, data, size);
-  s->off += size;
-}
+size_t total_size = 0;
 
 void *download_func(void *arg) {
 
   Slot *s = arg;
 
   Http http;
-  if(!http_init(&http, hostname, HTTPS_PORT, true)) {
+  if(!http_init(hostname, HTTPS_PORT, true, &http)) {
     s->error = "Can not establish connection in thread";
     return NULL;
   }
-
-  s->parser = http_parser(download_func_callback, NULL, s);
 
   char buf[1024];
   if(snprintf(buf, sizeof(buf), "Connection: close\r\nRange: bytes=%lld-%lld\r\n",
@@ -49,33 +43,26 @@ void *download_func(void *arg) {
     return NULL;
   }
 
-  if(http_request(&http, route, "GET",
-		  NULL, -1,
-		  (Http_Write_Callback) http_parser_consume, &s->parser, buf) != HTTP_RET_SUCCESS) {
-    s->error = "Request failed in thread";
-    return NULL;
+  Http_Request request;
+  if(!http_request_from(&http, route, "GET", buf, NULL, 0, &request)) {
+    s->error = "Can not instantiate request in thread";
+    return NULL;    
+  }
+
+  size_t got = 0;
+
+  char *data;
+  size_t data_len;
+  while(http_next_body(&request, &data, &data_len)) {
+    memcpy(s->space + s->off, data, data_len);
+    s->off += data_len;
+    got += data_len;
+    total_size += data_len;
   }
 
   http_free(&http);
   
   return NULL;
-}
-
-bool check_accept_range(void *userdata, Http_Parser_String key, Http_Parser_String value) {
-
-  int *accept_range = userdata;
-
-  if(http_parser_string_eq(key, "accept-ranges")) {
-    *accept_range = 0;
-
-    if(http_parser_string_eq(value, "bytes")) {
-      *accept_range = 1;
-    } else {
-      return false;
-    }
-  }
-  
-  return true;
 }
 
 bool parse_input(const char *input) {
@@ -101,7 +88,7 @@ bool parse_input(const char *input) {
 
 int main(int argc, char **argv) {
 
-  if(argc < 2) {
+  if(argc < 3) {
     fprintf(stderr, "ERROR: Please provide enough arguments\n");
     fprintf(stderr, "USAGE: %s <url> <output>\n", argv[0]);
     return 1;
@@ -116,7 +103,7 @@ int main(int argc, char **argv) {
   }
 
   Http http;
-  if(!http_init(&http, hostname, HTTPS_PORT, true)) {
+  if(!http_init(hostname, HTTPS_PORT, true, &http)) {
     fprintf(stderr, "ERROR: Can not instantiate a connection\n");
     return 1;
   }
@@ -124,25 +111,39 @@ int main(int argc, char **argv) {
   //-1 :: not appeared
   // 0 :: appeared but not 'bytes'
   // 1 :: 'bytes'
-  int accept_range = -1;
-  Http_Parser parser = http_parser(NULL, check_accept_range, &accept_range);
 
-  if(http_request(&http, route, "HEAD",
-		  NULL, -1,
-		  (Http_Write_Callback) http_parser_consume, &parser,
-		  "Connection: close\r\n") != HTTP_RET_SUCCESS) {
-    fprintf(stderr, "ERROR: The request failed\n");
+  int accept_range = -1;
+  Http_Request request;
+  if(!http_request_from(&http, route, "HEAD", NULL, NULL, 0, &request)) {
+    fprintf(stderr, "ERROR: Can not instantiate request\n");
     return 1;
   }
 
+  const char accept_cstr[] = "accept-ranges";
+  const char bytes_cstr[] = "bytes";
+
+  Http_Header header;
+  while(http_next_header(&request, &header)) {
+    
+    if(http_header_eq(header.key, header.key_len, accept_cstr, sizeof(accept_cstr) - 1)) {
+      accept_range = 0;
+
+      if(http_header_eq(header.value, header.value_len, bytes_cstr, sizeof(bytes_cstr) - 1)) {
+	accept_range = 1;
+      }
+    }
+  }
+
+  ////////////////////////////////////////////////////////////
+  
   if(accept_range != 1) {
     fprintf(stderr, "ERROR: Resource does not support Accept-Range\n");
     return 1;
   }
 
-  //printf("content-length: %d\n", parser.content_length);
+  printf("content-length: %llu\n", request.content_length);
 
-  unsigned char *space = malloc(parser.content_length);
+  unsigned char *space = malloc(request.content_length);
   if(!space) {
     fprintf(stderr, "ERROR: Can not allocate enough memory\n");
     return 1;
@@ -151,14 +152,14 @@ int main(int argc, char **argv) {
   Thread thread_ids[NUMBER_OF_THREADS];
   Slot slots[NUMBER_OF_THREADS];
 
-  int64_t ds = parser.content_length / NUMBER_OF_THREADS;
+  int64_t ds = request.content_length / NUMBER_OF_THREADS;
  
   for(int i=0;i<NUMBER_OF_THREADS;i++) {
 
     int64_t start = ds * i;
     int64_t end = ds * (i + 1);
     if(i == NUMBER_OF_THREADS - 1) {
-      end = parser.content_length;
+      end = request.content_length;
     }
 
     slots[i] = (Slot) { space, start, end - start, NULL };
@@ -186,7 +187,7 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  fwrite(space, parser.content_length, 1, f);
+  fwrite(space, request.content_length, 1, f);
 
   fclose(f);
   

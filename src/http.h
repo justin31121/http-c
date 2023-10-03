@@ -1,39 +1,36 @@
 #ifndef HTTP_H
 #define HTTP_H
 
-//TODO: Implement posting of 'chunked' data
-
-///////////////////////////////////////////////////////////////////////////
-
-// Define either HTTP_OPEN_SSL or HTTP_WIN32_SSL to use 'https://'. If neither of them is
-// defined http_init with ssl=true, will just return false. In order to use OPENSSL, you
-// need to first install it.
-
-// Provide the following flags to compile on windows:
-//
-// DEFAULT:
-//    msvc : ws2_32.lib
-//    mingw: -lws2_32
-// HTTP_WIN32_SSL:
-//    msvc : ws2_32.lib secur32.lib
-//    mingw: -lws2_32 -lsecur32
-// HTTP_OPEN_SSL:
-//    msvc : ws2_32.lib crypt32.lib advapi32.lib user32.lib libsslMD.lib libcryptoMD.lib
-//    mingw: -lws2_32 -lssl -lcrypto
-
 #ifndef HTTP_DEF
 #  define HTTP_DEF static inline
-#endif //HTTP_DEF
+#endif // HTTP_DEF
 
-#ifdef HTTP_VERBOSE
-#  include <stdio.h>
-#  define HTTP_LOG(...) do{ fflush(stdout); fprintf(stderr, "HTTP: " __VA_ARGS__); fprintf(stderr, "\n"); fflush(stderr); } while(0)
-#else
-#  define HTTP_LOG(...)
-#endif //HTTP_VERBOSE
+#ifndef HTTP_BUFFER_SIZE
+#  define HTTP_BUFFER_SIZE 8192
+#endif //HTTP_BUFFER_SIZE
+
+#ifndef HTTP_ENTRY_SIZE
+#  define HTTP_ENTRY_SIZE 2048
+#endif // HTTP_ENTRY_SIZE
+
+#ifndef HTTP_LOG
+#  ifdef HTTP_QUIET
+#    define HTTP_LOG(...)
+#  else
+#    include <stdio.h>
+#    define HTTP_LOG(...) fprintf(stderr, "HTTP_LOG: "); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n")
+#  endif // HTTP_QUIET
+#endif // HTTP_LOG
 
 #define HTTP_PORT 80
 #define HTTPS_PORT 443
+
+#include <stdio.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdarg.h>
+
+#include <assert.h>
 
 #ifdef _WIN32
 #  include <ws2tcpip.h>
@@ -46,68 +43,78 @@
 #  include <unistd.h>
 #endif
 
-#include <stdio.h>
-#include <stdbool.h>
-#include <stdint.h>
-#include <stdarg.h>
-
 #ifdef HTTP_OPEN_SSL
 #  include <openssl/ssl.h>
 #  include <openssl/err.h>
 #endif //HTTP_OPEN_SSL
 
-// The implementation for HTTP_WIN32_SLL and therefore for 'http_win32_tls_socket',
-// is taken from this example: 'https://gist.github.com/mmozeiko/c0dfcc8fec527a90a02145d2cc0bfb6d'.
-#ifdef HTTP_WIN32_SSL
-#  define SECURITY_WIN32
-#  include <security.h>
-#  include <schannel.h>
-#  include <shlwapi.h>
-#  define TLS_MAX_PACKET_SIZE (16384+512)
-
-typedef struct {
-  SOCKET sock;
-  CredHandle handle;
-  CtxtHandle context;
-  SecPkgContext_StreamSizes sizes;
-  int received;    // byte count in incoming buffer (ciphertext)
-  int used;        // byte count used from incoming buffer to decrypt current packet
-  int available;   // byte count available for decrypted bytes
-  char* decrypted; // points to incoming buffer where data is decrypted inplace
-  char incoming[TLS_MAX_PACKET_SIZE];
-} http_win32_tls_socket;
-
-#endif //HTTP_WIN32SLL
-
-#ifndef HTTP_BUFFER_SIZE
-#define HTTP_BUFFER_SIZE 8192
-#endif //HTTP_BUFFER_SIZE
-
-typedef enum{
-  HTTP_RET_ABORT = 0,
-  HTTP_RET_CONTINUE = 1,
-  HTTP_RET_SUCCESS = 2,
-}Http_Ret;
-
 typedef struct{
-
 #ifdef _WIN32
   SOCKET socket;
 #else
   int socket;
 #endif
-  const char *hostname;
+
 #ifdef HTTP_OPEN_SSL
   SSL *conn;  
-#elif defined(HTTP_WIN32_SSL)
-  http_win32_tls_socket win32_socket;  
-#endif //HTTP_OPEN_SSL
+#endif // HTTP_OPEN_SSL
   
+  const char *hostname;
 }Http;
 
-typedef bool (*Http_Sendf_Callback)(const char *data, size_t size, void *userdata);
+HTTP_DEF bool http_init(const char* hostname, uint16_t port, bool use_ssl, Http *http);
 
-typedef Http_Ret (*Http_Write_Callback)(void *userdata, const char *data, size_t size);
+HTTP_DEF bool http_socket_write(const char *data, size_t size, void *http);
+HTTP_DEF bool http_socket_read(char *data, size_t size, void *http, size_t *read);
+
+HTTP_DEF bool http_socket_connect_plain(Http *http, const char *hostname, uint16_t port);
+HTTP_DEF bool http_socket_write_plain(const char *data, size_t size, void *_http);
+HTTP_DEF bool http_socket_read_plain(char *buffer, size_t buffer_size, void *_http, size_t *read);
+
+HTTP_DEF void http_free(Http *http);
+
+typedef struct{
+  Http *http;
+
+  // Buffer read's
+  char buffer[HTTP_BUFFER_SIZE];
+  size_t buffer_pos, buffer_size;
+
+  // Parsing
+  char key[HTTP_ENTRY_SIZE];
+  size_t key_len;
+  char value[HTTP_ENTRY_SIZE];
+  size_t value_len;
+  int body, state, state2, pair;
+  size_t content_read;
+
+  // Info
+  int response_code;
+  size_t content_length;
+  
+}Http_Request;
+
+typedef struct{
+  char *key, *value;
+  size_t key_len, value_len;
+}Http_Header;
+
+HTTP_DEF bool http_request_from(Http *http, const char *route, const char *method,
+				const char *headers,
+				const unsigned char *body, size_t body_len,
+				Http_Request *request);
+HTTP_DEF bool http_next_header(Http_Request *r, Http_Header *entry);
+HTTP_DEF bool http_next_body(Http_Request *r, char **data, size_t *data_len);
+
+HTTP_DEF bool http_maybe_init_external_libs();
+
+HTTP_DEF bool http_parse_u64(char *buffer, size_t buffer_len, uint64_t *out);
+HTTP_DEF bool http_parse_hex_u64(char *buffer, size_t buffer_len, uint64_t *out);
+HTTP_DEF bool http_header_eq(const char *key, size_t key_len, const char *value, size_t value_len);
+
+//////////////////////////////////////////////////////////////////////////////////////////////
+
+typedef bool (*Http_Sendf_Callback)(const char *data, size_t size, void *userdata);
 
 typedef struct{
   Http_Sendf_Callback send_callback;
@@ -116,33 +123,6 @@ typedef struct{
   void *userdata;
   bool last;
 }Http_Sendf_Context;
-
-//  Public
-HTTP_DEF bool http_init(Http *http, const char* hostname, uint16_t port, bool use_ssl);
-//    Non-Nullable: http, route, method
-//    Nullable    : body, body_len, write_callback, userdata, headers_extra
-//    Note        : Each header in headers-extra, needs to be terminated by: "\r\n"
-HTTP_DEF Http_Ret http_request(Http *http, const char *route, const char *method,
-			       const unsigned char *body, int body_len,
-			       Http_Write_Callback write_callback, void *userdata,
-			       const char *headers_extra);
-HTTP_DEF void http_free(Http *http);
-
-HTTP_DEF Http_Ret http_fwrite(void *f, const char *buffer, size_t buffer_size);
-
-// Protected
-HTTP_DEF bool http_maybe_init_external_libs();
-HTTP_DEF void http_free_external_libs();
-
-//  Private
-HTTP_DEF bool http_socket_write(const char *data, size_t size, void *http);
-HTTP_DEF bool http_socket_read(char *data, size_t size, void *http, size_t *read);
-
-HTTP_DEF bool http_socket_write_plain(const char *data, size_t size, void *http);
-HTTP_DEF bool http_socket_read_plain(char *data, size_t size, void *http, size_t *read);
-HTTP_DEF bool http_socket_connect_tls(Http *http, const char *hostname);
-HTTP_DEF bool http_socket_connect_plain(Http *http, const char *hostname, uint16_t port);
-
 
 HTTP_DEF bool http_sendf(Http_Sendf_Callback send_callback, void *userdata,
 			 char *buffer, size_t buffer_cap, const char *format, ...);
@@ -155,6 +135,12 @@ HTTP_DEF size_t http_sendf_impl_copy(Http_Sendf_Context *context, size_t buffer_
 #ifdef HTTP_IMPLEMENTATION
 
 #ifdef _WIN32
+#  define HTTP_LOG_OS(method) char msg[1024]; FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM, NULL, GetLastError(), MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR) &msg, sizeof(msg), NULL); HTTP_LOG((method)"-error: (%d) %s", GetLastError(), msg);
+#else
+#  define HTTP_LOG_OS(method) HTTP_LOG((method)"-error: (%d) %s", errno, strerr(errno))
+#endif // _WIN32
+
+#ifdef _WIN32
 static bool http_global_wsa_startup = false;
 #endif //_WIN32
 
@@ -162,63 +148,57 @@ static bool http_global_wsa_startup = false;
 static SSL_CTX *http_global_ssl_context = NULL;
 #endif //HTTP_OPEN_SSL
 
-bool http_init(Http *http, const char* hostname, uint16_t port, bool use_ssl) {
+HTTP_DEF bool http_init(const char* hostname, uint16_t port, bool use_ssl, Http *h) {
 
   size_t hostname_len = strlen(hostname);
-  http->hostname = malloc(hostname_len + 1);
-  if(!http->hostname) {
+  h->hostname = malloc(hostname_len + 1);
+  if(!h->hostname) {
     return false;
   }
-  memcpy((char *) http->hostname, hostname, hostname_len + 1);
+  memcpy((char *) h->hostname, hostname, hostname_len + 1);
 
   if(!http_maybe_init_external_libs()) {
     return false;
   }
 
 #ifdef _WIN32
-  http->socket = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, 0);
-  if( http->socket == INVALID_SOCKET ) {
+  h->socket = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, 0);
+  if( h->socket == INVALID_SOCKET ) {
     HTTP_LOG("Failed to initialize socket");
     return false;
   }
 #elif linux
-  http->socket = socket(AF_INET, SOCK_STREAM, 0);
-  if( http->socket == -1) {
+  h->socket = socket(AF_INET, SOCK_STREAM, 0);
+  if( h->socket == -1) {
     HTTP_LOG("Failed to initialize socket");
     return false;
-  }    
-#endif
+  }
+#else
+  HTTP_LOG("Unsupported platform. Implement: http_init");
+  
+  return false;
+#endif // _WIN32
 
-  if(!http_socket_connect_plain(http, hostname, port)) {
-    HTTP_LOG("Can not connect to '%s:%u", hostname, port);
+  if(!http_socket_connect_plain(h, hostname, port)) {
+    HTTP_LOG("Can not connect to '%s:%u'", hostname, port);
     return false;
   }
 
 #ifdef HTTP_OPEN_SSL    
-  http->conn = NULL;
+  h->conn = NULL;
   
   if(use_ssl) {
-    http->conn = SSL_new(http_global_ssl_context);
-    if(!http->conn) {
-      HTTP_LOG("Fatal error using OPEN_SSL", hostname, port);
+    h->conn = SSL_new(http_global_ssl_context);
+    if(!h->conn) {
+      HTTP_LOG("Fatal error using OPEN_SSL");
       return false;
     }
-    SSL_set_fd(http->conn, (int) http->socket); // TODO: maybe check this cast
+    SSL_set_fd(h->conn, (int) h->socket); // TODO: maybe check this cast
 
-    SSL_set_connect_state(http->conn);
-    SSL_set_tlsext_host_name(http->conn, hostname);
-    if(SSL_connect(http->conn) != 1) {
+    SSL_set_connect_state(h->conn);
+    SSL_set_tlsext_host_name(h->conn, hostname);
+    if(SSL_connect(h->conn) != 1) {
       HTTP_LOG("Can not connect to '%s:%u' via SSL (OPEN_SSL)", hostname, port);
-      return false;
-    }    
-  }
-#elif defined(HTTP_WIN32_SSL)
-  http->win32_socket.sock = INVALID_SOCKET;
-  if(use_ssl) {
-    http->win32_socket.sock = http->socket;
-  
-    if(!http_socket_connect_tls(http, hostname)) {
-      HTTP_LOG("Can not connect to '%s:%u' via SSL (WIN32_SSL)", hostname, port);
       return false;
     }
   }
@@ -227,8 +207,37 @@ bool http_init(Http *http, const char* hostname, uint16_t port, bool use_ssl) {
     HTTP_LOG("Neither HTTP_OPEN_SSL nor HTTP_WIN32_SSL is defined. Define either to be able to use SSL.");
     return false;    
   }
+#endif // HTTP_OPEN_SSL
+
+  return true;
+}
+
+HTTP_DEF bool http_maybe_init_external_libs() {
+#ifdef _WIN32
+  if(!http_global_wsa_startup) {
+    
+    WSADATA wsaData;
+    if(WSAStartup(MAKEWORD(2,2), &wsaData) != 0) {
+      HTTP_LOG("Failed to initialize WSA (ws2_32.lib)\n");
+      return false;
+    }
+    
+    http_global_wsa_startup = true;
+  }
+#endif //_WIN32
+
+#ifdef HTTP_OPEN_SSL
+  if(!http_global_ssl_context) {
+    SSL_library_init();
+    OpenSSL_add_all_algorithms();
+    http_global_ssl_context = SSL_CTX_new(TLS_client_method());
+    if(!http_global_ssl_context) {
+      HTTP_LOG("Failed to initialize SSL (openssl.lib, crypto.lib)\n");
+      return false;
+    }    
+  }
 #endif //HTTP_OPEN_SSL
-  
+
   return true;
 }
 
@@ -247,18 +256,20 @@ HTTP_DEF bool http_socket_connect_plain(Http *http, const char *hostname, uint16
   snprintf(port_cstr, sizeof(port_cstr), "%u", port);
 
   if(getaddrinfo(hostname, port_cstr, &hints, &result) != 0) {
+    HTTP_LOG("getaddrinfo failed");
     freeaddrinfo(result);
     return false;
   }
 
+  bool out = true;
   if(connect(http->socket, result->ai_addr, (int) result->ai_addrlen) != 0) {
-    freeaddrinfo(result);
-    return false;
+    HTTP_LOG("connect failed: %d", GetLastError());
+    out = false;
   }
   
   freeaddrinfo(result);
 
-  return true;
+  return out;
 #elif linux
   struct sockaddr_in addr = {0};
 
@@ -291,339 +302,71 @@ HTTP_DEF bool http_socket_connect_plain(Http *http, const char *hostname, uint16
 #endif
 }
 
-//https://gist.github.com/mmozeiko/c0dfcc8fec527a90a02145d2cc0bfb6d
-HTTP_DEF bool http_socket_connect_tls(Http *http, const char *hostname) {
-#ifdef HTTP_WIN32_SSL
- 
-  http_win32_tls_socket *s = &http->win32_socket;
+HTTP_DEF void http_free(Http *http) {
 
-  // initialize schannel
-  {
-    SCHANNEL_CRED cred =
-      {
-	.dwVersion = SCHANNEL_CRED_VERSION,
-	.dwFlags =
-	//SCH_USE_STRONG_CRYPTO |          // use only strong crypto alogorithms
-	SCH_CRED_AUTO_CRED_VALIDATION |  // automatically validate server certificate
-	SCH_CRED_NO_DEFAULT_CREDS,     // no client certificate authentication
-	.grbitEnabledProtocols = SP_PROT_TLS1_2,
-      };
-
-    if (AcquireCredentialsHandleA(NULL, UNISP_NAME_A, SECPKG_CRED_OUTBOUND, NULL, &cred, NULL, NULL, &s->handle, NULL) != SEC_E_OK) {
-      HTTP_LOG("AcquireCredentialsHandleA failed");
-      return false;
-    }
-  }
-
-  s->received = s->used = s->available = 0;
-  s->decrypted = NULL;
-
-  // perform tls handshake
-  // 1) call InitializeSecurityContext to create/update schannel context
-  // 2) when it returns SEC_E_OK - tls handshake completed
-  // 3) when it returns SEC_I_INCOMPLETE_CREDENTIALS - server requests client certificate (not supported here)
-  // 4) when it returns SEC_I_CONTINUE_NEEDED - send token to server and read data
-  // 5) when it returns SEC_E_INCOMPLETE_MESSAGE - need to read more data from server
-  // 6) otherwise read data from server and go to step 1
-
-  CtxtHandle* context = NULL;
-  int result = 0;
-  for (;;) {
-    SecBuffer inbuffers[2] = { 0 };
-    inbuffers[0].BufferType = SECBUFFER_TOKEN;
-    inbuffers[0].pvBuffer = s->incoming;
-    inbuffers[0].cbBuffer = s->received;
-    inbuffers[1].BufferType = SECBUFFER_EMPTY;
-
-    SecBuffer outbuffers[1] = { 0 };
-    outbuffers[0].BufferType = SECBUFFER_TOKEN;
-
-    SecBufferDesc indesc = { SECBUFFER_VERSION, ARRAYSIZE(inbuffers), inbuffers };
-    SecBufferDesc outdesc = { SECBUFFER_VERSION, ARRAYSIZE(outbuffers), outbuffers };
-
-    DWORD flags = ISC_REQ_USE_SUPPLIED_CREDS | ISC_REQ_ALLOCATE_MEMORY | ISC_REQ_CONFIDENTIALITY | ISC_REQ_REPLAY_DETECT | ISC_REQ_SEQUENCE_DETECT | ISC_REQ_STREAM;
-    SECURITY_STATUS sec = InitializeSecurityContextA(
-						     &s->handle,
-						     context,
-						     context ? NULL : (SEC_CHAR*)hostname,
-						     flags,
-						     0,
-						     0,
-						     context ? &indesc : NULL,
-						     0,
-						     context ? NULL : &s->context,
-						     &outdesc,
-						     &flags,
-						     NULL);
-
-    // after first call to InitializeSecurityContext context is available and should be reused for next calls
-    context = &s->context;
-
-    if (inbuffers[1].BufferType == SECBUFFER_EXTRA) {
-      MoveMemory(s->incoming, s->incoming + (s->received - inbuffers[1].cbBuffer), inbuffers[1].cbBuffer);
-      s->received = inbuffers[1].cbBuffer;
-    } else {
-      s->received = 0;
-    }
-
-    if (sec == SEC_E_OK) {
-      // tls handshake completed
-      break;
-    } else if (sec == SEC_I_INCOMPLETE_CREDENTIALS) {
-      HTTP_LOG("Server asked for client certificate, not supported here");
-      result = -1;
-      break;
-    } else if (sec == SEC_I_CONTINUE_NEEDED) {
-      // need to send data to server
-      char* buffer = outbuffers[0].pvBuffer;
-      int size = outbuffers[0].cbBuffer;
-
-      while (size != 0) {
-	int d = send(s->sock, buffer, size, 0);
-	if (d <= 0) {
-	  break;
-	}
-	size -= d;
-	buffer += d;
-      }
-      FreeContextBuffer(outbuffers[0].pvBuffer);
-      if (size != 0) {
-	HTTP_LOG("Failed to fully send data to server");
-	result = -1;
-	break;
-      }
-    } else if (sec != SEC_E_INCOMPLETE_MESSAGE) {
-      // SEC_E_CERT_EXPIRED - certificate expired or revoked
-      // SEC_E_WRONG_PRINCIPAL - bad hostname
-      // SEC_E_UNTRUSTED_ROOT - cannot vertify CA chain
-      // SEC_E_ILLEGAL_MESSAGE / SEC_E_ALGORITHM_MISMATCH - cannot negotiate crypto algorithms
-#ifdef HTTP_VERBOSE
-
-      if(sec == SEC_E_INSUFFICIENT_MEMORY) {
-	HTTP_LOG("SEC_E_INSUFFICIENT_MEMORY");
-      } else if(sec == SEC_E_INTERNAL_ERROR) {
-	HTTP_LOG("SEC_E_INTERNAL_ERROR");
-      } else if(sec == SEC_E_INVALID_HANDLE) {
-	HTTP_LOG("SEC_E_INVALID_HANDLE");
-      } else if(sec == SEC_E_INVALID_TOKEN) {
-	HTTP_LOG("SEC_E_INVALID_TOKEN");
-      } else if(sec == SEC_E_LOGON_DENIED) {
-	HTTP_LOG("SEC_E_LOGON_DENIED");
-      } else if(sec == SEC_E_NO_AUTHENTICATING_AUTHORITY) {
-	HTTP_LOG("SEC_E_NO_AUTHENTICATING_AUTHORITY");
-      } else if(sec == SEC_E_NO_CREDENTIALS) {
-	HTTP_LOG("SEC_E_NO_CREDENTIALS");
-      } else if(sec == SEC_E_TARGET_UNKNOWN) {
-	HTTP_LOG("SEC_E_TARGET_UNKNOWN");
-      } else if(sec == SEC_E_UNSUPPORTED_FUNCTION) {
-	HTTP_LOG("SEC_E_UNSUPPORTED_FUNCTION");
-      } else if(sec == SEC_E_WRONG_PRINCIPAL) {
-	HTTP_LOG("SEC_E_WRONG_PRINCIPAL");
-      } else {
-	HTTP_LOG("I really dont know why this happens!");
-      }
-
-      
-#endif //HTTP_VERBOSE
-      result = -1;
-      break;
-    }
-    // read more data from server when possible
-    if (s->received == sizeof(s->incoming)) {
-      HTTP_LOG("Server is sending too much data instead of proper handshake?");
-      result = -1;
-      break;
-    }
-    int r = recv(s->sock, s->incoming + s->received, sizeof(s->incoming) - s->received, 0);
-    if (r == 0) {
-      HTTP_LOG("server disconnected socket");
-      return false;
-    } else if (r < 0) {
-      HTTP_LOG("Socket recv-error");
-      result = -1;
-      break;
-    }
-    s->received += r;
-  }
-
-  if (result != 0) {
-    DeleteSecurityContext(context);
-    FreeCredentialsHandle(&s->handle);
-    return false;
-  }
-
-  QueryContextAttributes(context, SECPKG_ATTR_STREAM_SIZES, &s->sizes);
-  
-  return true;
-#else
-  (void) http;
-  (void) hostname;
-  return false;
-#endif
-}
-
-#ifdef HTTP_OPEN_SSL
-#  define HTTP_WRITE_FUNC http_socket_write
-#elif defined(HTTP_WIN32_SSL)
-#  define HTTP_WRITE_FUNC http_socket_write
-#else
-#  define HTTP_WRITE_FUNC http_socket_write_plain
-#endif //HTTP_OPEN_SSL
-
-HTTP_DEF Http_Ret http_request(Http *http, const char *route, const char *method,
-			       const unsigned char *body, int body_len,
-			       Http_Write_Callback write_callback, void *userdata,
-			       const char *headers) {
-  // WRITE
-  char buffer[HTTP_BUFFER_SIZE];
-  if(body) {
-    if(!http_sendf(HTTP_WRITE_FUNC, http, buffer, sizeof(buffer),
-		   "%s %s HTTP/1.1\r\n"
-		   "Host: %s\r\n"
-		   "%s"
-		   "Content-Length: %d\r\n"
-		   "\r\n"
-		   "%.*s", method, route, http->hostname, headers ? headers : "", body_len , body_len, (char *) body)) {
-      HTTP_LOG("Failed to send http-request");
-      return false;
-    }        
-  } else {
-    if(!http_sendf(HTTP_WRITE_FUNC, http, buffer, sizeof(buffer),
-		   "%s %s HTTP/1.1\r\n"
-		   "Host: %s\r\n"
-		   "%s"
-		   "\r\n", method, route, http->hostname, headers ? headers : "")) {
-      HTTP_LOG("Failed to send http-request");
-      return false;
-    }    
-  }
-
-  // READ
-  size_t read;
-  while(http_socket_read(buffer, sizeof(buffer), http, &read)) {
-    
-    if(read == 0)
-      return true;
-    
-    if(write_callback) {
-      
-      Http_Ret ret = write_callback(userdata, buffer, read);
-      if( ret == HTTP_RET_ABORT )
-	return HTTP_RET_ABORT;
-      else if( ret == HTTP_RET_SUCCESS )
-	return HTTP_RET_SUCCESS;
-      
-    }
-  }
-  
-  return HTTP_RET_CONTINUE;
-}
-
-HTTP_DEF Http_Ret http_fwrite(void *f, const char *buffer, size_t buffer_size) {
-  fwrite(buffer, buffer_size, 1, (FILE *) f);
-  return HTTP_RET_CONTINUE;
-}
-
-void http_free(Http *http) {
-  
 #ifdef HTTP_OPEN_SSL
   if(http->conn) {
     SSL_set_shutdown(http->conn, SSL_RECEIVED_SHUTDOWN | SSL_SENT_SHUTDOWN);
     SSL_shutdown(http->conn);
     SSL_free(http->conn);
   }
-#elif defined(HTTP_WIN32_SSL)
-
-  if(http->win32_socket.sock != INVALID_SOCKET) {
-
-    http_win32_tls_socket *s = &http->win32_socket;
-    DWORD type = SCHANNEL_SHUTDOWN;
-
-    SecBuffer inbuffers[1];
-    inbuffers[0].BufferType = SECBUFFER_TOKEN;
-    inbuffers[0].pvBuffer = &type;
-    inbuffers[0].cbBuffer = sizeof(type);
-
-    SecBufferDesc indesc = { SECBUFFER_VERSION, ARRAYSIZE(inbuffers), inbuffers };
-    ApplyControlToken(&s->context, &indesc);
-
-    SecBuffer outbuffers[1];
-    outbuffers[0].BufferType = SECBUFFER_TOKEN;
-
-    SecBufferDesc outdesc = { SECBUFFER_VERSION, ARRAYSIZE(outbuffers), outbuffers };
-    DWORD flags = ISC_REQ_ALLOCATE_MEMORY | ISC_REQ_CONFIDENTIALITY | ISC_REQ_REPLAY_DETECT | ISC_REQ_SEQUENCE_DETECT | ISC_REQ_STREAM;
-    if (InitializeSecurityContextA(&s->handle, &s->context, NULL, flags, 0, 0, &outdesc, 0, NULL, &outdesc, &flags, NULL) == SEC_E_OK)
-      {
-	char* buffer = outbuffers[0].pvBuffer;
-	int size = outbuffers[0].cbBuffer;
-	while (size != 0)
-	  {
-	    int d = send(s->sock, buffer, size, 0);
-	    if (d <= 0)
-	      {
-		// ignore any failures socket will be closed anyway
-		break;
-	      }
-	    buffer += d;
-	    size -= d;
-	  }
-	FreeContextBuffer(outbuffers[0].pvBuffer);
-      }
-    shutdown(s->sock, SD_BOTH);
-
-    DeleteSecurityContext(&s->context);
-    FreeCredentialsHandle(&s->handle);
-  }
-    
-#endif //HTTP_OPEN_SSL
-
+#endif // HTTP_OPEN_SSL
+  
 #ifdef _WIN32
   closesocket(http->socket);
-  free((char *) http->hostname);
+  http->socket = INVALID_SOCKET;
 #elif linux
   close(http->socket);
 #endif
+
+  free((char *) http->hostname);
 }
 
-HTTP_DEF bool http_maybe_init_external_libs() {
-
-#ifdef HTTP_OPEN_SSL
-  if(!http_global_ssl_context) {
-    SSL_library_init();
-    OpenSSL_add_all_algorithms();
-    http_global_ssl_context = SSL_CTX_new(TLS_client_method());
-    if(!http_global_ssl_context) {
-      HTTP_LOG("Failed to initialize SSL (openssl.lib, crypto.lib)\n");
-      return false;
-    }    
-  }
-#endif //HTTP_OPEN_SSL
-
-#ifdef _WIN32
-  if(!http_global_wsa_startup) {
-    
-    WSADATA wsaData;
-    if(WSAStartup(MAKEWORD(2,2), &wsaData) != 0) {
-      HTTP_LOG("Failed to initialize WSA (ws2_32.lib)\n");
-      return false;
-    }
-    
-    http_global_wsa_startup = true;
-  }
-#endif //_WIN32
-
-  return true;
-}
-
-HTTP_DEF void http_free_external_libs() {
+HTTP_DEF bool http_socket_write(const char *data, size_t size, void *_http) {
   
 #ifdef HTTP_OPEN_SSL
-  SSL_CTX_free(http_global_ssl_context);
-#endif //HTTP_OPEN_SSLs
+  Http *http = (Http *) _http;
 
-#ifdef _WIN32
-  WSACleanup();
-#endif //_WIN32
+  if(!http->conn)
+    return http_socket_write_plain(data, size, http);
+
+  // This loop is needed, for the case that SSL_write returns the error: SSL_ERROR_WANT_WRITE.
+  // If the write fails, because of any error, but we should continue trying to write.
+  
+  do{
+    int ret = SSL_write(http->conn, data, (int) size);
+    if(ret <= 0) {
+
+      int error = SSL_get_error(http->conn, ret);
+
+      if( error == SSL_ERROR_ZERO_RETURN ) {
+
+	// connection was closed
+	return false;
+      } else if( error == SSL_ERROR_WANT_READ ) {
+
+	// try again calling SSL_write
+	continue;
+      } else {
+
+	// ssl_write error
+	// TODO: maybe handle other errors
+	return false;	
+      }
+    } else {
+
+      // ssl_write success
+      return true;
+    } 
+
+  }while(1);
+#else
+  (void) data;
+  (void) size;
+  (void) _http;
+
+  return false;
+#endif // HTTP_OPEN_SSL  
 }
 
 HTTP_DEF bool http_socket_write_plain(const char *data, size_t size, void *_http) {
@@ -634,7 +377,7 @@ HTTP_DEF bool http_socket_write_plain(const char *data, size_t size, void *_http
   int ret = send(http->socket, data, (int) size, 0);
   if(ret == SOCKET_ERROR) {
     
-    // send error
+    // send error    
     return false;
   } else if(ret == 0) {
     
@@ -669,101 +412,59 @@ HTTP_DEF bool http_socket_write_plain(const char *data, size_t size, void *_http
 #endif 
 }
 
-HTTP_DEF bool http_socket_write(const char *data, size_t size, void *_http) {
-  Http *http = (Http *) _http;
+HTTP_DEF bool http_socket_read(char *buffer, size_t buffer_size, void *_http, size_t *read) {
 
 #ifdef HTTP_OPEN_SSL
+  Http *http = (Http *) _http;
 
   if(!http->conn)
-    return http_socket_write_plain(data, size, http);
+    return http_socket_read_plain(buffer, buffer_size, http, read);
 
-  // This loop is needed, for the case that SSL_write returns the error: SSL_ERROR_WANT_WRITE.
-  // If the write fails, because of any error, but we should continue trying to write.
-  
+  *read = 0;
+
+  // This loop is needed, for the case that SSL_read returns the error: SSL_ERROR_WANT_READ.
+  // In this case we should not close the connection which would be indicated by returning
+  // a read of 0. And we should not return false, because there is still data that wants to
+  // be read.
   do{
-    int ret = SSL_write(http->conn, data, (int) size);
-    if(ret <= 0) {
 
+    int ret = SSL_read(http->conn, buffer, (int) buffer_size);
+    if(ret < 0) {
       int error = SSL_get_error(http->conn, ret);
 
       if( error == SSL_ERROR_ZERO_RETURN ) {
 
 	// connection was closed
+	*read = 0;
 	return false;
       } else if( error == SSL_ERROR_WANT_READ ) {
 
-	// try again calling SSL_write
+	// try again calling SSL_read
 	continue;
       } else {
 
-
-	  // ssl_write error
-	  // TODO: maybe handle other errors
-	  return false;	
+	// ssl_read error
+	// TODO: maybe handle other errors
+	return false;	
       }
     } else {
 
-      // ssl_write success
+      // ssl_read success
+      *read = (size_t) ret;
       return true;
-    } 
+    }
 
+    break;
   }while(1);
-#elif defined(HTTP_WIN32_SSL)
-
-  //https://gist.github.com/mmozeiko/c0dfcc8fec527a90a02145d2cc0bfb6d
-  if( http->win32_socket.sock == INVALID_SOCKET )
-    return http_socket_write_plain(data, size, http);
-
-  while (size != 0) {
-    size_t use = min(size, http->win32_socket.sizes.cbMaximumMessage);
-
-    char wbuffer[TLS_MAX_PACKET_SIZE];
-
-    // was an assertion
-    if(http->win32_socket.sizes.cbHeader + http->win32_socket.sizes.cbMaximumMessage + http->win32_socket.sizes.cbTrailer > sizeof(wbuffer)) {
-      return false;
-    }
-
-    SecBuffer buffers[3];
-    buffers[0].BufferType = SECBUFFER_STREAM_HEADER;
-    buffers[0].pvBuffer = wbuffer;
-    buffers[0].cbBuffer = http->win32_socket.sizes.cbHeader;
-    buffers[1].BufferType = SECBUFFER_DATA;
-    buffers[1].pvBuffer = wbuffer + http->win32_socket.sizes.cbHeader;
-    buffers[1].cbBuffer = (unsigned long) use;
-    buffers[2].BufferType = SECBUFFER_STREAM_TRAILER;
-    buffers[2].pvBuffer = wbuffer + http->win32_socket.sizes.cbHeader + use;
-    buffers[2].cbBuffer = http->win32_socket.sizes.cbTrailer;
-
-    CopyMemory(buffers[1].pvBuffer, data, use);
-
-    SecBufferDesc desc = { SECBUFFER_VERSION, ARRAYSIZE(buffers), buffers };
-    SECURITY_STATUS sec = EncryptMessage(&http->win32_socket.context, 0, &desc, 0);
-    if (sec != SEC_E_OK) {
-      // this should not happen, but just in case check it
-      return false;
-    }
-
-    int total = buffers[0].cbBuffer + buffers[1].cbBuffer + buffers[2].cbBuffer;
-    int sent = 0;
-    while (sent != total) {
-      int d = send(http->win32_socket.sock, wbuffer + sent, total - sent, 0);
-      if (d <= 0) {
-	// error sending data to socket, or server disconnected
-	return false;
-      }
-      sent += d;
-    }
-
-    data = (char*)data + use;
-    size -= use;
-  }
-
-  return true;
-  
 #else
-  return http_socket_write_plain(data, size, http);
-#endif //HTTP_OPEN_SSL
+  (void) buffer;
+  (void) buffer_size;
+  (void) _http;
+  (void) read;
+
+  return false;
+#endif // HTTP_OPEN_SSL
+
 }
 
 HTTP_DEF bool http_socket_read_plain(char *buffer, size_t buffer_size, void *_http, size_t *read) {
@@ -773,7 +474,6 @@ HTTP_DEF bool http_socket_read_plain(char *buffer, size_t buffer_size, void *_ht
 #ifdef _WIN32
   int ret = recv(http->socket, buffer, (int) buffer_size, 0);
   if(ret == SOCKET_ERROR) {
-      
     // recv error
     return false;
   } else if(ret == 0) {
@@ -809,179 +509,464 @@ HTTP_DEF bool http_socket_read_plain(char *buffer, size_t buffer_size, void *_ht
 #endif 
 }
 
-HTTP_DEF bool http_socket_read(char *buffer, size_t buffer_size, void *_http, size_t *read) {
-  Http *http = (Http *) _http;
+#define HTTP_REQUEST_STATE_DONE -2
+#define HTTP_REQUEST_STATE_ERROR -1
+#define HTTP_REQUEST_STATE_IDLE 0
+#define HTTP_REQUEST_STATE_R    1
+#define HTTP_REQUEST_STATE_RN   2
+#define HTTP_REQUEST_STATE_RNR  3
+#define HTTP_REQUEST_STATE_BODY 4
+
+#define HTTP_REQUEST_PAIR_INVALID 0
+#define HTTP_REQUEST_PAIR_KEY 1
+#define HTTP_REQUEST_PAIR_VALUE 2
+
+#define HTTP_REQUEST_BODY_NONE 0
+#define HTTP_REQUEST_BODY_CONTENT_LEN 1
+#define HTTP_REQUEST_BODY_CHUNKED 2
+#define HTTP_REQUEST_BODY_INFO 3
 
 #ifdef HTTP_OPEN_SSL
-
-  if(!http->conn)
-    return http_socket_read_plain(buffer, buffer_size, http, read);
-
-    *read = 0;
-
-    // This loop is needed, for the case that SSL_read returns the error: SSL_ERROR_WANT_READ.
-    // In this case we should not close the connection which would be indicated by returning
-    // a read of 0. And we should not return false, because there is still data that wants to
-    // be read.
-    do{
-
-    int ret = SSL_read(http->conn, buffer, (int) buffer_size);
-    if(ret < 0) {
-      int error = SSL_get_error(http->conn, ret);
-
-      if( error == SSL_ERROR_ZERO_RETURN ) {
-
-	// connection was closed
-	*read = 0;
-	return false;
-      } else if( error == SSL_ERROR_WANT_READ ) {
-
-	// try again calling SSL_read
-	continue;
-      } else {
-
-	// ssl_read error
-	// TODO: maybe handle other errors
-	return false;	
-      }
-    } else {
-
-      // ssl_read success
-      *read = (size_t) ret;
-      return true;
-    }
-
-    break;
-  }while(1);
-#elif defined(HTTP_WIN32_SSL)
-  
-  if( http->win32_socket.sock == INVALID_SOCKET )
-    return http_socket_read_plain(buffer, buffer_size, http, read);
-
-  int result = 0;
-
-  while (buffer_size != 0) {
-    if (http->win32_socket.decrypted) {
-      // if there is decrypted data available, then use it as much as possible
-      size_t use = min(buffer_size, http->win32_socket.available);
-      CopyMemory(buffer, http->win32_socket.decrypted, use);
-      buffer = (char*)buffer + use;
-      buffer_size -= use;
-      result += (int) use;
-
-      if ((int) use == http->win32_socket.available) {
-	// all decrypted data is used, remove ciphertext from incoming buffer so next time it starts from beginning
-	MoveMemory(http->win32_socket.incoming, http->win32_socket.incoming + http->win32_socket.used, http->win32_socket.received - http->win32_socket.used);
-	http->win32_socket.received -= http->win32_socket.used;
-	http->win32_socket.used = 0;
-	http->win32_socket.available = 0;
-	http->win32_socket.decrypted = NULL;
-      }
-      else {
-	http->win32_socket.available -= (int) use;
-	http->win32_socket.decrypted += (int) use;
-      }
-    } else {
-      // if any ciphertext data available then try to decrypt it
-      if (http->win32_socket.received != 0)
-	{
-	  SecBuffer buffers[4];
-		
-	  //was an assertion
-	  if(http->win32_socket.sizes.cBuffers != ARRAYSIZE(buffers)) {
-	    return false;
-	  }
-
-	  buffers[0].BufferType = SECBUFFER_DATA;
-	  buffers[0].pvBuffer = http->win32_socket.incoming;
-	  buffers[0].cbBuffer = http->win32_socket.received;
-	  buffers[1].BufferType = SECBUFFER_EMPTY;
-	  buffers[2].BufferType = SECBUFFER_EMPTY;
-	  buffers[3].BufferType = SECBUFFER_EMPTY;
-
-	  SecBufferDesc desc = { SECBUFFER_VERSION, ARRAYSIZE(buffers), buffers };
-
-	  SECURITY_STATUS sec = DecryptMessage(&http->win32_socket.context, &desc, 0, NULL);
-	  if (sec == SEC_E_OK) {
-
-	    //was assertion
-	    if(buffers[0].BufferType != SECBUFFER_STREAM_HEADER) return false;
-	    //was assertion
-	    if(buffers[1].BufferType != SECBUFFER_DATA) return false;
-	    //was assertion		    
-	    if(buffers[2].BufferType != SECBUFFER_STREAM_TRAILER) return false;
-
-	    http->win32_socket.decrypted = buffers[1].pvBuffer;
-	    http->win32_socket.available = buffers[1].cbBuffer;
-	    http->win32_socket.used = http->win32_socket.received - (buffers[3].BufferType == SECBUFFER_EXTRA ? buffers[3].cbBuffer : 0);
-
-	    // data is now decrypted, go back to beginning of loop to copy memory to output buffer
-	    continue;
-	  } else if (sec == SEC_I_CONTEXT_EXPIRED) {
-	    // server closed TLS connection (but socket is still open)
-	    http->win32_socket.received = 0;
-	    if(result == 0) {
-	      *read = 0;
-	      return true;
-	    } else  if(result < 0) {
-	      return false;
-	    } else {
-	      *read =result;
-	      return true;
-	    }
-	  } else if (sec == SEC_I_RENEGOTIATE) {
-	    // server wants to renegotiate TLS connection, not implemented here
-	    return false;
-	  } else if (sec != SEC_E_INCOMPLETE_MESSAGE) {
-	    // some other schannel or TLS protocol error
-	    return false;
-	  }
-	  // otherwise sec == SEC_E_INCOMPLETE_MESSAGE which means need to read more data
-	}
-      // otherwise not enough data received to decrypt
-
-      if (result != 0) {
-	// some data is already copied to output buffer, so return that before blocking with recv
-	break;
-      }
-
-      if (http->win32_socket.received == sizeof(http->win32_socket.incoming)) {
-	// server is sending too much garbage data instead of proper TLS packet
-	return false;
-      }
-
-      // wait for more ciphertext data from server
-      int r = recv(http->win32_socket.sock, http->win32_socket.incoming + http->win32_socket.received, sizeof(http->win32_socket.incoming) - http->win32_socket.received, 0);
-      if (r == 0) {
-	// server disconnected socket
-	return 0;
-      } else if (r < 0) {
-	// error receiving data from socket
-	result = -1;
-	break;
-      }
-      http->win32_socket.received += r;
-    }
-  }
-
-  if(result == 0) {
-    *read = 0;
-    return true;
-  } else  if(result < 0) {
-    return false;
-  } else {
-    *read = result;
-    return true;
-  }
-  
+#  define HTTP_WRITE_FUNC http_socket_write
+#  define HTTP_READ_FUNC http_socket_read
 #else
+#  define HTTP_WRITE_FUNC http_socket_write_plain
+#  define HTTP_READ_FUNC http_socket_read_plain
+#endif // HTTP_OPEN_SSL
 
-  return http_socket_read_plain(buffer, buffer_size, http, read);
 
-#endif //HTTP_OPEN_SSL
+HTTP_DEF bool http_request_from(Http *http, const char *route, const char *method,
+				const char *headers,
+				const unsigned char *body, size_t body_len,
+				Http_Request *r) {
+
+  r->http = http;
+  r->buffer_size = 0;
+  r->body = HTTP_REQUEST_BODY_NONE;
+  r->state = HTTP_REQUEST_STATE_IDLE;
+  r->state2 = HTTP_REQUEST_STATE_IDLE;
+  r->pair = HTTP_REQUEST_PAIR_KEY;
+  r->key_len = 0;
+  r->value_len = 0;
+  
+  if(body_len > 0) {
+
+    int len = (int) body_len;
+    
+    if(!http_sendf(HTTP_WRITE_FUNC, http, r->buffer, sizeof(r->buffer),
+		   "%s %s HTTP/1.1\r\n"
+		   "Host: %s\r\n"
+		   "%s"
+		   "Content-Length: %d\r\n"
+		   "\r\n"
+		   "%.*s", method, route, http->hostname, headers ? headers : "", len , len, (char *) body)) {
+      HTTP_LOG("Failed to send http-request");
+      return false;
+    }
+    
+  } else {
+    if(!http_sendf(HTTP_WRITE_FUNC, http, r->buffer, sizeof(r->buffer),
+		   "%s %s HTTP/1.1\r\n"
+		   "Host: %s\r\n"
+		   "%s"
+		   "\r\n", method, route, http->hostname, headers ? headers : "")) {
+      HTTP_LOG("Failed to send http-request");
+      return false;
+    }    
+  }
+
+  if(!HTTP_READ_FUNC(r->buffer, sizeof(r->buffer), r->http, &r->buffer_size)) {
+    return false;
+  }
+  if(r->buffer_size == 0) {
+    return false;
+  }
+  r->buffer_pos = 0;
+  
+  return true;
 }
 
-////////////////////////////////////////////////////////////////////
+HTTP_DEF bool http_next_header(Http_Request *r, Http_Header *header) {
+
+ start:
+  if(r->state == HTTP_REQUEST_STATE_ERROR ||
+     r->state == HTTP_REQUEST_STATE_DONE) {
+    return false;
+  }
+
+  if(r->buffer_size == 0) {
+    if(!HTTP_READ_FUNC(r->buffer, sizeof(r->buffer), r->http, &r->buffer_size)) {
+      return false;
+    }
+
+    if(r->buffer_size == 0) {
+      return false;
+    }
+    r->buffer_pos = 0;
+  }
+
+  for(size_t i=0;i<r->buffer_size;i++) {
+    int state_before = r->state;
+
+    char c = r->buffer[r->buffer_pos + i];
+    
+    if(c == '\r') {
+      if(r->state == HTTP_REQUEST_STATE_IDLE) r->state = HTTP_REQUEST_STATE_R;
+      else if(r->state == HTTP_REQUEST_STATE_R) r->state = HTTP_REQUEST_STATE_IDLE;
+      else if(r->state == HTTP_REQUEST_STATE_RN) r->state = HTTP_REQUEST_STATE_RNR;
+      else if(r->state == HTTP_REQUEST_STATE_RNR) r->state = HTTP_REQUEST_STATE_IDLE;
+      else if(r->state == HTTP_REQUEST_STATE_BODY) r->state = HTTP_REQUEST_STATE_BODY;
+    } else if(c == '\n') {
+      if(r->state == HTTP_REQUEST_STATE_IDLE) r->state = HTTP_REQUEST_STATE_IDLE;
+      else if(r->state == HTTP_REQUEST_STATE_R) r->state = HTTP_REQUEST_STATE_RN;
+      else if(r->state == HTTP_REQUEST_STATE_RN) r->state = HTTP_REQUEST_STATE_IDLE;
+      else if(r->state == HTTP_REQUEST_STATE_RNR) r->state = HTTP_REQUEST_STATE_BODY;
+      else if(r->state == HTTP_REQUEST_STATE_BODY) r->state = HTTP_REQUEST_STATE_BODY;
+    } else {
+      if(r->state == HTTP_REQUEST_STATE_BODY) r->state = HTTP_REQUEST_STATE_BODY;
+      else r->state = HTTP_REQUEST_STATE_IDLE;
+    }
+
+    if(r->state == HTTP_REQUEST_STATE_IDLE && state_before == HTTP_REQUEST_STATE_RN) {
+      r->pair = HTTP_REQUEST_PAIR_KEY;
+    }
+
+    if(r->pair == HTTP_REQUEST_PAIR_KEY) {
+      if(c == ':') {
+	r->pair = HTTP_REQUEST_PAIR_VALUE;
+      } else if(c == '\r') {
+
+	// 'HTTP/1.1 '
+	static char http1_prefix[] = "HTTP";
+	static size_t http1_prefix_len = sizeof(http1_prefix) - 1;
+
+	if(r->key_len < http1_prefix_len ||
+	   memcmp(http1_prefix, r->key, http1_prefix_len) != 0) {
+	  HTTP_LOG("http1-prefix is not present: '%.*s'", (int) r->key_len, r->key);
+	  r->state = HTTP_REQUEST_STATE_ERROR;
+	  return false;
+	}
+
+	// '200'
+	if(r->key_len < http1_prefix_len + 5 + 3) {
+	  HTTP_LOG("http1 responseCode is not present");
+	  r->state = HTTP_REQUEST_STATE_ERROR;
+	  return false;
+	}
+
+        size_t out;
+	if(!http_parse_u64(r->key + 5 + http1_prefix_len, 3, &out)) {
+	  HTTP_LOG("Failed to parse: '%.*s'", (int) 3, r->key + http1_prefix_len + 5);
+	  r->state = HTTP_REQUEST_STATE_ERROR;
+	  return false;
+	}
+	r->response_code = (int) out;	
+	
+      } else if(c == '\n') {
+	r->key_len = 0;
+      } else {
+	assert(r->key_len < sizeof(r->key) - 1);
+	r->key[r->key_len++] = c;
+      }
+    } else if(r->pair == HTTP_REQUEST_PAIR_VALUE) {
+      if(c == '\r') {
+
+	static char content_length_cstr[] = "content-length";
+	static size_t content_length_cstr_len = sizeof(content_length_cstr) - 1;
+
+	if(http_header_eq(r->key, r->key_len, content_length_cstr, content_length_cstr_len)) {
+
+	  size_t len = r->value_len - 1;
+	  if(!http_parse_u64(r->value, len, &r->content_length)) {
+	    HTTP_LOG("Failed to parse: '%.*s'", (int) len, r->value);
+	    r->state = HTTP_REQUEST_STATE_ERROR;
+	    return false;
+	  }
+
+	  if(r->body != HTTP_REQUEST_BODY_NONE) {
+	    HTTP_LOG("Http-Body was already specified");
+	    r->state = HTTP_REQUEST_STATE_ERROR;
+	    return false;
+ 
+	  }
+	  r->body = HTTP_REQUEST_BODY_CONTENT_LEN;
+	  r->content_read = 0;
+	}
+
+	static char chunked_encoding[] = "transfer-encoding";
+	static size_t chunked_encoding_len = sizeof(chunked_encoding) - 1;
+	static char chunked[] = "chunked";
+	static size_t chunked_len = sizeof(chunked) - 1;
+	
+	if(http_header_eq(r->key, r->key_len, chunked_encoding, chunked_encoding_len) &&
+	   http_header_eq(r->value, r->value_len - 1, chunked, chunked_len)) {
+	  if(r->body != HTTP_REQUEST_BODY_NONE) {
+	    HTTP_LOG("Http-Body was already specified");
+	    r->state = HTTP_REQUEST_STATE_ERROR;
+	    return false;
+ 
+	  }
+	  r->body = HTTP_REQUEST_BODY_CHUNKED;
+	  r->content_length = 0;
+	  r->content_read = 0;
+	}
+
+        r->key[r->key_len] = 0;
+	r->value[r->value_len - 1] = 0;
+
+	header->key = r->key;
+	header->key_len = r->key_len;
+	header->value = r->value;
+	header->value_len = r->value_len - 1;
+	
+	r->pair = HTTP_REQUEST_PAIR_INVALID;
+	r->value_len = 0;
+	r->key_len = 0;
+
+	r->buffer_pos  += i - 1;
+	r->buffer_size -= i - 1;
+        return true;
+      } else {
+	assert(r->value_len < sizeof(r->value) - 1);
+	if(r->value_len == 0) r->value_len++;
+	else r->value[r->value_len++ - 1] = c;
+      }
+    }
+
+    if(r->state == HTTP_REQUEST_STATE_BODY) {
+      r->buffer_pos  += i + 1;
+      r->buffer_size -= i + 1;
+      return false;
+    }
+
+  }
+
+  r->buffer_size = 0;
+  goto start;
+}
+
+HTTP_DEF bool http_next_body(Http_Request *r, char **data, size_t *data_len) {
+  
+  // Maybe parse Headers
+  if(r->state != HTTP_REQUEST_STATE_BODY) {
+    Http_Header header;
+    while(http_next_header(r, &header)) ;
+  }
+
+ start:
+
+  // Mabye exit
+  if(r->state == HTTP_REQUEST_STATE_ERROR ||
+     r->state == HTTP_REQUEST_STATE_DONE) {
+    return false;
+  }
+ 
+  // Read 
+  if(r->buffer_size == 0) {
+    if(!HTTP_READ_FUNC(r->buffer, sizeof(r->buffer), r->http, &r->buffer_size)) {
+      return false;
+    }
+
+    if(r->buffer_size == 0) {
+      return false;
+    }
+    r->buffer_pos = 0;
+  }
+
+  // Consume
+  if(r->body == HTTP_REQUEST_BODY_CONTENT_LEN) {
+
+    if(r->content_read + r->buffer_size > r->content_length) {
+      HTTP_LOG("Server send too much data");
+      return false;
+    }
+    r->content_read += r->buffer_size;
+    
+    if(r->content_read == r->content_length) {
+      r->state = HTTP_REQUEST_STATE_DONE;
+    }
+    
+    *data = r->buffer + r->buffer_pos;
+    *data_len = r->buffer_size;
+    r->buffer_size = 0;
+
+    return true;
+  } else if(r->body == HTTP_REQUEST_BODY_CHUNKED) {
+
+    for(size_t i=0;i<r->buffer_size;i++) {
+      char c = r->buffer[r->buffer_pos + i];
+
+      if(c == '\r') {
+	r->state2 = HTTP_REQUEST_STATE_R;
+      } else if(c == '\n') {
+	if(r->state2 == HTTP_REQUEST_STATE_R) r->state2 = HTTP_REQUEST_STATE_RN;
+	else r->state2 = HTTP_REQUEST_STATE_IDLE;
+      } else {
+	r->state2 = HTTP_REQUEST_STATE_IDLE;
+      }
+
+      if(r->content_read == 0) {
+	if(r->state2 == HTTP_REQUEST_STATE_IDLE) {
+	  assert(r->key_len < 4);
+	  r->key[r->key_len++] = c;
+	} else if(r->state2 == HTTP_REQUEST_STATE_RN) {
+
+	  // TODO: this may be incorrect
+	  if(r->key_len == 0) {
+	    /* HTTP_LOG("Failed to parse: '%.*s'", (int) r->key_len, r->key); */
+	    /* r->state = HTTP_REQUEST_STATE_ERROR; */
+	    /* return false; */
+
+	    continue;
+	  }
+
+	  if(!http_parse_hex_u64(r->key, r->key_len, &r->content_read)) {
+	    HTTP_LOG("Failed to parse: '%.*s'", (int) r->key_len, r->key);
+	    r->state = HTTP_REQUEST_STATE_ERROR;
+	    return false;
+	  }
+	  r->key_len = 0;
+
+	  size_t advance = i + 1; // consume '\n'
+	  
+	  r->buffer_pos += advance;
+	  r->buffer_size -= advance;
+	  if(r->content_read == 0) {
+	    r->state = HTTP_REQUEST_STATE_DONE;
+	    return false;
+	  } else {
+	    goto start;
+	  }
+	  
+	} else {
+	  // parse \r\n
+	}	      
+      } else {
+
+	if(r->state2 == HTTP_REQUEST_STATE_RN) {
+	  
+	  size_t len = i - 1;      // exclude '\r'
+	  size_t advance = i + 1;  // consume '\n'
+
+	  *data = r->buffer + r->buffer_pos;
+	  *data_len = len;
+
+	  r->buffer_pos += advance;
+	  r->buffer_size -= advance;
+
+	  assert(r->content_read >= len);
+	  r->content_read -= len;
+	  r->content_length += len;
+	  return true;
+	} else {
+	  //do nothing
+	}	  
+      }
+      
+    }
+
+    if(r->content_read == 0) {
+      r->buffer_size = 0;
+      
+      goto start;
+    } else {
+
+      size_t len = r->buffer_size;
+      if(r->state2 == HTTP_REQUEST_STATE_R) {
+	len--;
+      }
+
+      *data = r->buffer + r->buffer_pos;
+      *data_len = len;
+
+      assert(r->content_read >= len);
+      r->content_read -= len;
+      r->content_length += len;
+
+      r->buffer_pos += r->buffer_size;
+      r->buffer_size -= r->buffer_size;
+      
+      return true;
+    }
+      
+
+  } else {
+    
+    HTTP_LOG("Unimplemented body specification");
+    return false;
+  }
+    
+}
+
+HTTP_DEF bool http_parse_hex_u64(char *buffer, size_t buffer_len, uint64_t *out) {
+  size_t i = 0;
+  uint64_t res = 0;
+
+  while(i < buffer_len) {
+    char c = buffer[i];
+
+    res *= 16;
+    if('0' <= c && c <= '9') {
+      res += c - '0';
+    } else if('a' <= c && c <= 'z') {
+      res += c - 'W';
+    } else if('A' <= c && c <= 'Z') {
+      res += c - '7';
+    } else {
+      break;
+    }
+    i++;
+  }
+
+  *out = res;
+  
+  return i > 0 && i == buffer_len;
+}
+
+HTTP_DEF bool http_parse_u64(char *buffer, size_t buffer_len, uint64_t *out) {
+
+  uint64_t res = 0;
+
+  size_t i = 0;
+  while(i < buffer_len && '0' <= buffer[i] && buffer[i] <= '9') {
+    res *= 10;
+    res += buffer[i] - '0';
+    i++;
+  }
+
+  *out = res;
+  
+  return i > 0 && i == buffer_len;
+}
+
+// key  : 'ConTENT-LeNGTHasdfasdfasdf'
+// value: 'content-length'
+//     => true
+HTTP_DEF bool http_header_eq(const char *key, size_t key_len, const char *value, size_t value_len) {
+
+  if(key_len != value_len) {
+    return false;
+  }
+
+  for(size_t i=0;i<key_len;i++) {
+    char src = value[i];
+    char trg = key[i];
+
+    if('a' <= src && src <= 'z' &&
+       'A' <= trg && trg <= 'Z')  {
+      trg += ' ';
+    }
+
+    if(src != trg) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////
+
 
 HTTP_DEF bool http_sendf(Http_Sendf_Callback send_callback, void *userdata,
 			 char *buffer, size_t buffer_cap, const char *format, ...) {
@@ -990,7 +975,6 @@ HTTP_DEF bool http_sendf(Http_Sendf_Callback send_callback, void *userdata,
   bool result = http_sendf_impl(send_callback, userdata, buffer, buffer_cap, format, va);
   va_end(va);
   return result;
-
 }
 
 HTTP_DEF bool http_sendf_impl(Http_Sendf_Callback send_callback, void *userdata,
@@ -1032,7 +1016,7 @@ HTTP_DEF bool http_sendf_impl(Http_Sendf_Callback send_callback, void *userdata,
 
 	if(n == 0) {
 	  const char *zero = "0";
-	  if(!http_sendf_impl_send(&context, &buffer_size, zero, strlen(zero))) {
+	  if(!http_sendf_impl_send(&context, &buffer_size, zero, 1)) {
 	    return false;
 	  }	  
 	} else {
@@ -1081,7 +1065,6 @@ HTTP_DEF bool http_sendf_impl(Http_Sendf_Callback send_callback, void *userdata,
     return false;
   }
 
-
   return true;
 }
 
@@ -1120,6 +1103,6 @@ HTTP_DEF size_t http_sendf_impl_copy(Http_Sendf_Context *context, size_t buffer_
 
 }
 
-#endif //HTTP_IMPLEMENTATION
+#endif // HTTP_IMPLEMENTATION
 
-#endif //HTTP_H
+#endif // HTTP_H

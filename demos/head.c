@@ -1,12 +1,10 @@
 #include <stdio.h>
 
 #define HTTP_PARSER_IMPLEMENATATION
-#define HTTP_PARSER_VERBOSE
 #include "../src/http_parser.h"
 
 #define HTTP_IMPLEMENTATION
 #define HTTP_OPEN_SSL
-#define HTTP_VERBOSE
 #include "../src/http.h"
 
 int main(int argc, char **argv) {
@@ -40,15 +38,19 @@ int main(int argc, char **argv) {
   const char *route = input + n;
 
   Http http;
-  if(!http_init(&http, hostname, HTTPS_PORT, true)) {
+  if(!http_init(hostname, HTTPS_PORT, true, &http)) {
     return 1;
   }
 
-  if(!http_request(&http, route, "HEAD",
-		   NULL, -1,
-		   http_fwrite, stdout,
-		   "Connection: close\r\n"))
+  Http_Request request;
+  if(!http_request_from(&http, route, "HEAD", NULL, NULL, 0, &request)) {
     return 1;
+  }
+
+  Http_Header header;
+  while(http_next_header(&request, &header)) {
+    printf("%s:%s\n", header.key, header.value);
+  }
   
   http_free(&http);
 
