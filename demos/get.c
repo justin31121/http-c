@@ -9,19 +9,53 @@
 
 #include "../src/common.h"
 
-int main() {
+int main(int argc, char **argv) {
+
+  if(argc < 2) {
+    fprintf(stderr, "ERROR: Please provide enough arguments\n");
+    fprintf(stderr, "USAGE: %s <url>\n", argv[0]);
+    return 1;
+  }
+
+  const char *input = argv[1];
+
+  size_t input_len = strlen(input);
+  if(input_len<8 || strncmp(input, "https://", 8) != 0) {
+    return false;
+  }
+
+  size_t n = 8;
+  while(n < input_len && input[n] != '/') n++;
+  if(n == input_len) {
+    return 1;
+  }
+
+  char hostname[256];
+  if(n > sizeof(hostname) - 1) {
+    return 1;
+  }
+  memcpy(hostname, input + 8, n - 8);
+  hostname[n - 8] = 0;
+  
+  const char *route = input + n;
 
   Region region;
   if(!region_init(&region, 4096))
     panic("region_init");
 
   Http http;
-  if(!http_init("www.example.com", HTTPS_PORT, true, &http))
+  if(!http_init(hostname, HTTPS_PORT, true, &http))
     panic("http_init");
 
   Http_Request request;
-  if(!http_request_from(&http, "/", "GET", "Connection: Close\r\n", NULL, 0, &request))
+  if(!http_request_from(&http, route, "GET", "Connection: Close\r\n", NULL, 0, &request))
     panic("http_request_from");
+
+  Http_Header header;
+  while(http_next_header(&request, &header)) {
+    printf("%s:%s\n", header.key, header.value);
+  }
+  printf("\n");
 
   size_t count = 0;
 
