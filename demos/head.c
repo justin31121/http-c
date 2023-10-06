@@ -1,8 +1,5 @@
 #include <stdio.h>
 
-#define HTTP_PARSER_IMPLEMENATATION
-#include "../src/http_parser.h"
-
 #define HTTP_IMPLEMENTATION
 #define HTTP_OPEN_SSL
 #include "../src/http.h"

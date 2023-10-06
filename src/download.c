@@ -1,9 +1,5 @@
 #include <stdio.h>
 
-#define HTTP_PARSER_IMPLEMENTATION
-#define HTTP_PARSER_VERBOSE
-#include "http_parser.h"
-
 #define HTTP_IMPLEMENTATION
 //#define HTTP_WIN32_SSL
 #define HTTP_OPEN_SSL
