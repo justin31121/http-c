@@ -4,7 +4,8 @@
 #include "../src/region.h"
 
 #define HTTP_IMPLEMENTATION
-#define HTTP_OPEN_SSL
+#define HTTP_WIN32_SSL
+//#define HTTP_OPEN_SSL
 #include "../src/http.h"
 
 #include "../src/common.h"
