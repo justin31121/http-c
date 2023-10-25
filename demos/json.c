@@ -58,10 +58,10 @@ int main() {
     if(!json_array_append(array.as.arrayval, json)) panic("json_array_append");
   }
 
-  printf( "Array: %llu\n", json_array_len(array) );
+  printf( "Array: %llu\n", json_array_len(array.as.arrayval) );
   json_fprint(stdout, array); printf("\n\n");
 
-  printf( "Json: %zu\n", json_object_len(object) );
+  printf( "Json: %zu\n", json_object_len(object.as.objectval) );
   json_fprint(stdout, object); printf("\n\n");
 
   if(json_object_has(object.as.objectval, "value")) {

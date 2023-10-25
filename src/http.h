@@ -25,13 +25,6 @@
 #define HTTP_PORT 80
 #define HTTPS_PORT 443
 
-#include <stdio.h>
-#include <stdbool.h>
-#include <stdint.h>
-#include <stdarg.h>
-
-#include <assert.h>
-
 #ifdef _WIN32
 #  include <ws2tcpip.h>
 #  include <windows.h>
@@ -69,6 +62,14 @@ typedef struct {
 } http_win32_tls_socket;
 
 #endif // HTTP_WIN32_SSL
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdarg.h>
+#include <assert.h>
+#include <string.h>
 
 typedef struct{
 #ifdef _WIN32
@@ -115,8 +116,10 @@ typedef struct{
   size_t value_len;
   int body, state, state2, pair;
   size_t content_read;
+  bool chunked_debug;
 
   // Info
+  bool ok;
   int response_code;
   size_t content_length;
   
@@ -162,6 +165,12 @@ HTTP_DEF size_t http_sendf_impl_copy(Http_Sendf_Context *context, size_t buffer_
 
 #ifdef HTTP_IMPLEMENTATION
 
+#ifdef _WIN32
+#  define HTTP_INVALID (Http) { .socket = INVALID_SOCKET, .hostname = NULL }
+#else // linux
+#  define HTTP_INVALID (Http) { .socket = -1, .hostname = NULL }
+#endif // _WIN32
+
 #ifdef HTTP_QUIET
 #  ifdef _WIN32
 #    define HTTP_LOG_OS(method) char msg[1024]; FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM, NULL, GetLastError(), MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR) &msg, sizeof(msg), NULL); HTTP_LOG((method)"-error: (%d) %s", GetLastError(), msg);
@@ -181,7 +190,7 @@ static SSL_CTX *http_global_ssl_context = NULL;
 #endif //HTTP_OPEN_SSL
 
 HTTP_DEF bool http_init(const char* hostname, uint16_t port, bool use_ssl, Http *h) {
-
+  
   size_t hostname_len = strlen(hostname);
   h->hostname = malloc(hostname_len + 1);
   if(!h->hostname) {
@@ -358,6 +367,7 @@ HTTP_DEF void http_free(Http *http) {
     SSL_set_shutdown(http->conn, SSL_RECEIVED_SHUTDOWN | SSL_SENT_SHUTDOWN);
     SSL_shutdown(http->conn);
     SSL_free(http->conn);
+    http->conn = NULL;
   }
 #endif // HTTP_OPEN_SSL
 
@@ -398,18 +408,27 @@ HTTP_DEF void http_free(Http *http) {
 
     DeleteSecurityContext(&s->context);
     FreeCredentialsHandle(&s->handle);
+    http->win32_tls.socket = INVALID_SOCKET;
   }
 
 #endif // HTTP_WIN32_SSL
   
 #ifdef _WIN32
-  closesocket(http->socket);
-  http->socket = INVALID_SOCKET;
+  if(http->socket != INVALID_SOCKET) {
+    closesocket(http->socket);
+    http->socket = INVALID_SOCKET;    
+  }
 #elif linux
-  close(http->socket);
+  if(http->socket >= 0) {
+    close(http->socket);    
+  }
 #endif
 
-  free((char *) http->hostname);
+  if(http->hostname) {
+    free((char *) http->hostname);
+    http->hostname = NULL;
+  }
+
 }
 
 HTTP_DEF bool http_socket_write(const char *data, size_t size, void *_http) {
@@ -749,7 +768,7 @@ HTTP_DEF bool http_socket_connect_tls(Http *http, const char *hostname) {
 #ifdef HTTP_WIN32_SSL
   http_win32_tls_socket *s = &http->win32_tls;
 
-   // initialize schannel
+  // initialize schannel
   {
     SCHANNEL_CRED cred =
       {
@@ -1012,6 +1031,15 @@ HTTP_DEF bool http_socket_read_plain(char *buffer, size_t buffer_size, void *_ht
 #  define HTTP_READ_FUNC http_socket_read_plain
 #endif // HTTP_OPEN_SSL
 
+#ifdef HTTP_DEBUG
+
+HTTP_DEF bool http_foo(const char *data, size_t size, void *userdata) {
+  (void) userdata;
+  HTTP_LOG("%.*s", (int) size, data);
+  return 1;
+}
+
+#endif // HTTP_DEBUG
 
 HTTP_DEF bool http_request_from(Http *http, const char *route, const char *method,
 				const char *headers,
@@ -1026,6 +1054,8 @@ HTTP_DEF bool http_request_from(Http *http, const char *route, const char *metho
   r->pair = HTTP_REQUEST_PAIR_KEY;
   r->key_len = 0;
   r->value_len = 0;
+  r->content_read = 0;
+  r->chunked_debug = false;
   
   if(body_len > 0) {
 
@@ -1043,6 +1073,18 @@ HTTP_DEF bool http_request_from(Http *http, const char *route, const char *metho
     }
     
   } else {
+
+#ifdef HTTP_DEBUG 
+    if(!http_sendf(http_foo, http, r->buffer, sizeof(r->buffer),
+		   "%s %s HTTP/1.1\r\n"
+		   "Host: %s\r\n"
+		   "%s"
+		   "\r\n", method, route, http->hostname, headers ? headers : "")) {
+      HTTP_LOG("Failed to send http-request");
+      return false;
+    }
+#endif // HTTP_DEBUG
+    
     if(!http_sendf(HTTP_WRITE_FUNC, http, r->buffer, sizeof(r->buffer),
 		   "%s %s HTTP/1.1\r\n"
 		   "Host: %s\r\n"
@@ -1138,7 +1180,16 @@ HTTP_DEF bool http_next_header(Http_Request *r, Http_Header *header) {
 	  r->state = HTTP_REQUEST_STATE_ERROR;
 	  return false;
 	}
-	r->response_code = (int) out;	
+	r->response_code = (int) out;
+
+	r->ok = 199 <= r->response_code && r->response_code <= 299;
+	
+#ifndef HTTP_QUIET
+	if(!r->ok) {
+	  HTTP_LOG("Request to %s has failed with the code: %d", r->http->hostname, r->response_code);
+#endif // HTTP_QUIET
+	  
+	}
 	
       } else if(c == '\n') {
 	r->key_len = 0;
@@ -1203,6 +1254,11 @@ HTTP_DEF bool http_next_header(Http_Request *r, Http_Header *header) {
 
 	r->buffer_pos  += i - 1;
 	r->buffer_size -= i - 1;
+
+#ifdef HTTP_DEBUG
+	HTTP_LOG("%s=%s", header->key, header->value);
+#endif // HTTP_DEBUG
+	
         return true;
       } else {
 	assert(r->value_len < sizeof(r->value) - 1);
@@ -1268,9 +1324,31 @@ HTTP_DEF bool http_next_body(Http_Request *r, char **data, size_t *data_len) {
     *data_len = r->buffer_size;
     r->buffer_size = 0;
 
+#ifndef HTTP_QUIET
+    if(!r->ok) {
+      HTTP_LOG("%.*s", (int) *data_len, *data);
+    }
+#endif // HTTP_QUIET
+
     return true;
   } else if(r->body == HTTP_REQUEST_BODY_CHUNKED) {
 
+    if(r->content_read > 0) {
+      size_t len = r->content_read;
+      if(len > r->buffer_size) len = r->buffer_size;
+
+      *data = r->buffer + r->buffer_pos;
+      *data_len = len;
+
+      r->buffer_pos += len;
+      r->buffer_size -= len;
+
+      r->content_read   -= len;
+      r->content_length += len;
+
+      return true;
+    }
+    
     for(size_t i=0;i<r->buffer_size;i++) {
       char c = r->buffer[r->buffer_pos + i];
 
@@ -1283,21 +1361,20 @@ HTTP_DEF bool http_next_body(Http_Request *r, char **data, size_t *data_len) {
 	r->state2 = HTTP_REQUEST_STATE_IDLE;
       }
 
-      if(r->content_read == 0) {
-	if(r->state2 == HTTP_REQUEST_STATE_IDLE) {
-	  assert(r->key_len < 4);
-	  r->key[r->key_len++] = c;
-	} else if(r->state2 == HTTP_REQUEST_STATE_RN) {
-
-	  // TODO: this may be incorrect
-	  if(r->key_len == 0) {
-	    /* HTTP_LOG("Failed to parse: '%.*s'", (int) r->key_len, r->key); */
-	    /* r->state = HTTP_REQUEST_STATE_ERROR; */
-	    /* return false; */
-
-	    continue;
+      if(r->state2 == HTTP_REQUEST_STATE_IDLE) {
+	if(r->key_len >= sizeof(r->key)) {
+	  HTTP_LOG("'%.*s' chunked length is too long", (int) r->key_len, r->key);
+	  r->state = HTTP_REQUEST_STATE_ERROR;
+	  return false;
+	}
+	r->key[r->key_len++] = c;	
+      } else if(r->state2 == HTTP_REQUEST_STATE_RN) {
+	if(r->key_len == 0) { // terminating \r\n, look for new length
+	  if(r->chunked_debug) {
+	    r->state = HTTP_REQUEST_STATE_DONE;
+	    return false;
 	  }
-
+	} else { // parse length
 	  if(!http_parse_hex_u64(r->key, r->key_len, &r->content_read)) {
 	    HTTP_LOG("Failed to parse: '%.*s'", (int) r->key_len, r->key);
 	    r->state = HTTP_REQUEST_STATE_ERROR;
@@ -1305,67 +1382,150 @@ HTTP_DEF bool http_next_body(Http_Request *r, char **data, size_t *data_len) {
 	  }
 	  r->key_len = 0;
 
-	  size_t advance = i + 1; // consume '\n'
-	  
-	  r->buffer_pos += advance;
-	  r->buffer_size -= advance;
 	  if(r->content_read == 0) {
-	    r->state = HTTP_REQUEST_STATE_DONE;
-	    return false;
-	  } else {
-	    goto start;
+	    r->chunked_debug = true;
 	  }
 	  
-	} else {
-	  // parse \r\n
-	}	      
+	  r->buffer_pos  += i + 1;
+	  r->buffer_size -= i + 1;
+	  goto start;
+	}
       } else {
+	//wait for \n
+      }
+      
+    }
 
-	if(r->state2 == HTTP_REQUEST_STATE_RN) {
+    r->buffer_size = 0;
+    
+    goto start;
+    
+/*     for(size_t i=0;(r->content_read < r->buffer_size) && i<r->buffer_size;i++) { */
+/*       char c = r->buffer[r->buffer_pos + i]; */
+
+/*       if(c == '\r') { */
+/* 	r->state2 = HTTP_REQUEST_STATE_R; */
+/*       } else if(c == '\n') { */
+/* 	if(r->state2 == HTTP_REQUEST_STATE_R) r->state2 = HTTP_REQUEST_STATE_RN; */
+/* 	else r->state2 = HTTP_REQUEST_STATE_IDLE; */
+/*       } else { */
+/* 	r->state2 = HTTP_REQUEST_STATE_IDLE; */
+/*       } */
+
+/*       if(r->content_read == 0) { */
+/* 	if(r->state2 == HTTP_REQUEST_STATE_IDLE) { */
+/* 	  if(r->key_len >= sizeof(r->key)) { */
+/* 	    HTTP_LOG("'%.*s' chunked length is too long", (int) r->key_len, r->key); */
+/* 	    r->state = HTTP_REQUEST_STATE_ERROR; */
+/* 	    return false; */
+/* 	  } */
+/* 	  r->key[r->key_len++] = c; */
+/* 	} else if(r->state2 == HTTP_REQUEST_STATE_RN) { */
+
+/* 	  // TODO: this may be incorrect */
+/* 	  if(r->key_len == 0) { */
+	    
+/* 	    //goto start; */
+
+/* 	    r->state = HTTP_REQUEST_STATE_DONE; */
+/* 	    return false; */
+/* 	  } */
+
+/* 	  if(!http_parse_hex_u64(r->key, r->key_len, &r->content_read)) { */
+/* 	    HTTP_LOG("Failed to parse: '%.*s'", (int) r->key_len, r->key); */
+/* 	    r->state = HTTP_REQUEST_STATE_ERROR; */
+/* 	    return false; */
+/* 	  } */
+/* 	  HTTP_LOG("0x%.*s == %llu", (int) r->key_len, r->key, r->content_read); */
+/* 	  r->key_len = 0; */
+
+/* 	  size_t advance = i + 1; // consume '\n' */
+/* 	  i++; */
 	  
-	  size_t len = i - 1;      // exclude '\r'
-	  size_t advance = i + 1;  // consume '\n'
+/* 	  r->buffer_pos += advance; */
+/* 	  r->buffer_size -= advance; */
+/* 	  if(r->content_read == 0) { */
+/* 	    r->state = HTTP_REQUEST_STATE_DONE; */
+/* 	    return false; */
+/* 	  } else { */
+/* 	    goto start; */
+/* 	  } */
+	  
+/* 	} else { */
+/* 	  // parse \r\n */
+/* 	}	       */
+/*       } else { */
 
-	  *data = r->buffer + r->buffer_pos;
-	  *data_len = len;
+/* 	if(r->state2 == HTTP_REQUEST_STATE_RN) { */
+	  
+/* 	  // exclude '\r' */
+/* 	  assert(i != 0); */
+/* 	  size_t len = i - 1; */
+	  
+/* 	  // consume '\n' */
+/* 	  size_t advance = i + 1; */
 
-	  r->buffer_pos += advance;
-	  r->buffer_size -= advance;
+/* 	  *data = r->buffer + r->buffer_pos; */
+/* 	  *data_len = len; */
 
-	  assert(r->content_read >= len);
-	  r->content_read -= len;
-	  r->content_length += len;
-	  return true;
-	} else {
-	  //do nothing
-	}	  
-      }
+/* 	  assert(r->buffer_size >= advance); */
+/* 	  r->buffer_size -= advance; */
+/* 	  r->buffer_pos += advance; */
+
+/* 	  if(r->content_read < len) { */
+/* 	    HTTP_LOG("ERROR: len too big. content_read: %llu, len: %llu", r->content_read, len); */
+/* 	    for(size_t j=0;j<len;j++) { */
+/* 	      char *d = r->buffer + r->buffer_pos + j; */
+/* 	      HTTP_LOG(" '%c' (%d)", *d, *d); */
+/* 	    } */
+/* 	    r->state = HTTP_REQUEST_STATE_ERROR; */
+/* 	    return false; */
+/* 	  } */
+
+/* 	  r->content_read   -= len; */
+/* 	  r->content_length += len; */
+
+/* #ifndef HTTP_QUIET */
+/* 	  if(!r->ok) { */
+/* 	    HTTP_LOG("%.*s", (int) *data_len, *data); */
+/* 	  } */
+/* #endif // HTTP_QUIET	   */
+/* 	  return true; */
+/* 	} else { */
+/* 	  //do nothing */
+/* 	}	   */
+/*       } */
       
-    }
+/*     } */
 
-    if(r->content_read == 0) {
-      r->buffer_size = 0;
+/*     if(r->content_read == 0) { */
+/*       r->buffer_size = 0; */
       
-      goto start;
-    } else {
+/*       goto start; */
+/*     } else { */
 
-      size_t len = r->buffer_size;
-      if(r->state2 == HTTP_REQUEST_STATE_R) {
-	len--;
-      }
+/*       size_t len = r->buffer_size; */
+/*       if(r->content_read < r->buffer_size && r->state2 == HTTP_REQUEST_STATE_R) { */
+/* 	len--; */
+/*       } */
 
-      *data = r->buffer + r->buffer_pos;
-      *data_len = len;
-
-      assert(r->content_read >= len);
-      r->content_read -= len;
-      r->content_length += len;
-
-      r->buffer_pos += r->buffer_size;
-      r->buffer_size -= r->buffer_size;
+/*       *data = r->buffer + r->buffer_pos; */
+/*       *data_len = len; */
       
-      return true;
-    }
+/*       r->content_read -= len; */
+/*       r->content_length += len; */
+
+/*       r->buffer_pos += r->buffer_size; */
+/*       r->buffer_size -= r->buffer_size; */
+
+/* #ifndef HTTP_QUIET */
+/*       if(!r->ok) { */
+/* 	HTTP_LOG("%.*s", (int) *data_len, *data); */
+/*       } */
+/* #endif // HTTP_QUIET */
+      
+/*       return true; */
+/*     } */
       
 
   } else {

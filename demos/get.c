@@ -22,7 +22,7 @@ int main(int argc, char **argv) {
 
   size_t input_len = strlen(input);
   if(input_len<8 || strncmp(input, "https://", 8) != 0) {
-    return false;
+    return 1;
   }
 
   size_t n = 8;
