@@ -1219,7 +1219,7 @@ HTTP_DEF bool http_next_header(Http_Request *r, Http_Header *header) {
  
 	  }
 	  r->body = HTTP_REQUEST_BODY_CONTENT_LEN;
-	  r->content_read = 0;
+	  r->content_read = 0;	  
 	}
 
 	static char chunked_encoding[] = "transfer-encoding";
@@ -1270,6 +1270,11 @@ HTTP_DEF bool http_next_header(Http_Request *r, Http_Header *header) {
     if(r->state == HTTP_REQUEST_STATE_BODY) {
       r->buffer_pos  += i + 1;
       r->buffer_size -= i + 1;
+
+      if(r->body == HTTP_REQUEST_BODY_CONTENT_LEN && r->content_length == 0) {
+	r->state = HTTP_REQUEST_STATE_DONE;
+      }
+      
       return false;
     }
 
@@ -1396,138 +1401,9 @@ HTTP_DEF bool http_next_body(Http_Request *r, char **data, size_t *data_len) {
       
     }
 
-    r->buffer_size = 0;
-    
+    r->buffer_size = 0;    
     goto start;
     
-/*     for(size_t i=0;(r->content_read < r->buffer_size) && i<r->buffer_size;i++) { */
-/*       char c = r->buffer[r->buffer_pos + i]; */
-
-/*       if(c == '\r') { */
-/* 	r->state2 = HTTP_REQUEST_STATE_R; */
-/*       } else if(c == '\n') { */
-/* 	if(r->state2 == HTTP_REQUEST_STATE_R) r->state2 = HTTP_REQUEST_STATE_RN; */
-/* 	else r->state2 = HTTP_REQUEST_STATE_IDLE; */
-/*       } else { */
-/* 	r->state2 = HTTP_REQUEST_STATE_IDLE; */
-/*       } */
-
-/*       if(r->content_read == 0) { */
-/* 	if(r->state2 == HTTP_REQUEST_STATE_IDLE) { */
-/* 	  if(r->key_len >= sizeof(r->key)) { */
-/* 	    HTTP_LOG("'%.*s' chunked length is too long", (int) r->key_len, r->key); */
-/* 	    r->state = HTTP_REQUEST_STATE_ERROR; */
-/* 	    return false; */
-/* 	  } */
-/* 	  r->key[r->key_len++] = c; */
-/* 	} else if(r->state2 == HTTP_REQUEST_STATE_RN) { */
-
-/* 	  // TODO: this may be incorrect */
-/* 	  if(r->key_len == 0) { */
-	    
-/* 	    //goto start; */
-
-/* 	    r->state = HTTP_REQUEST_STATE_DONE; */
-/* 	    return false; */
-/* 	  } */
-
-/* 	  if(!http_parse_hex_u64(r->key, r->key_len, &r->content_read)) { */
-/* 	    HTTP_LOG("Failed to parse: '%.*s'", (int) r->key_len, r->key); */
-/* 	    r->state = HTTP_REQUEST_STATE_ERROR; */
-/* 	    return false; */
-/* 	  } */
-/* 	  HTTP_LOG("0x%.*s == %llu", (int) r->key_len, r->key, r->content_read); */
-/* 	  r->key_len = 0; */
-
-/* 	  size_t advance = i + 1; // consume '\n' */
-/* 	  i++; */
-	  
-/* 	  r->buffer_pos += advance; */
-/* 	  r->buffer_size -= advance; */
-/* 	  if(r->content_read == 0) { */
-/* 	    r->state = HTTP_REQUEST_STATE_DONE; */
-/* 	    return false; */
-/* 	  } else { */
-/* 	    goto start; */
-/* 	  } */
-	  
-/* 	} else { */
-/* 	  // parse \r\n */
-/* 	}	       */
-/*       } else { */
-
-/* 	if(r->state2 == HTTP_REQUEST_STATE_RN) { */
-	  
-/* 	  // exclude '\r' */
-/* 	  assert(i != 0); */
-/* 	  size_t len = i - 1; */
-	  
-/* 	  // consume '\n' */
-/* 	  size_t advance = i + 1; */
-
-/* 	  *data = r->buffer + r->buffer_pos; */
-/* 	  *data_len = len; */
-
-/* 	  assert(r->buffer_size >= advance); */
-/* 	  r->buffer_size -= advance; */
-/* 	  r->buffer_pos += advance; */
-
-/* 	  if(r->content_read < len) { */
-/* 	    HTTP_LOG("ERROR: len too big. content_read: %llu, len: %llu", r->content_read, len); */
-/* 	    for(size_t j=0;j<len;j++) { */
-/* 	      char *d = r->buffer + r->buffer_pos + j; */
-/* 	      HTTP_LOG(" '%c' (%d)", *d, *d); */
-/* 	    } */
-/* 	    r->state = HTTP_REQUEST_STATE_ERROR; */
-/* 	    return false; */
-/* 	  } */
-
-/* 	  r->content_read   -= len; */
-/* 	  r->content_length += len; */
-
-/* #ifndef HTTP_QUIET */
-/* 	  if(!r->ok) { */
-/* 	    HTTP_LOG("%.*s", (int) *data_len, *data); */
-/* 	  } */
-/* #endif // HTTP_QUIET	   */
-/* 	  return true; */
-/* 	} else { */
-/* 	  //do nothing */
-/* 	}	   */
-/*       } */
-      
-/*     } */
-
-/*     if(r->content_read == 0) { */
-/*       r->buffer_size = 0; */
-      
-/*       goto start; */
-/*     } else { */
-
-/*       size_t len = r->buffer_size; */
-/*       if(r->content_read < r->buffer_size && r->state2 == HTTP_REQUEST_STATE_R) { */
-/* 	len--; */
-/*       } */
-
-/*       *data = r->buffer + r->buffer_pos; */
-/*       *data_len = len; */
-      
-/*       r->content_read -= len; */
-/*       r->content_length += len; */
-
-/*       r->buffer_pos += r->buffer_size; */
-/*       r->buffer_size -= r->buffer_size; */
-
-/* #ifndef HTTP_QUIET */
-/*       if(!r->ok) { */
-/* 	HTTP_LOG("%.*s", (int) *data_len, *data); */
-/*       } */
-/* #endif // HTTP_QUIET */
-      
-/*       return true; */
-/*     } */
-      
-
   } else {
     
     HTTP_LOG("Unimplemented body specification");
